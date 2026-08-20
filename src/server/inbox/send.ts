@@ -17,7 +17,7 @@ import {
   validateOutgoing,
 } from "@/server/whatsapp/media";
 import { SendChannelError } from "@/server/whatsapp/channel";
-import { sendEvolutionText } from "@/server/whatsapp/evolution";
+import { sendEvolutionText, sendEvolutionMedia } from "@/server/whatsapp/evolution";
 
 /** Error tipado del envío; `code` mapea a HTTP en la capa de API. */
 export class SendError extends Error {
@@ -291,6 +291,131 @@ export async function sendMediaMessage(input: {
 }): Promise<SendResult> {
   // Validación previa (FR-007): tipo y tamaño antes de tocar disco o red.
   const kind = validateOutgoing(input.file.mimeType, input.file.data.byteLength);
+
+  // Canal Evolution: sin ventana 24h, sin credenciales de Meta. Envía por /send/media.
+  if (getEnv().CHANNEL_PROVIDER === "evolution") {
+    const db = getDb();
+    const rows = await db
+      .select({ conversation: schema.conversation, contact: schema.contact })
+      .from(schema.conversation)
+      .innerJoin(
+        schema.contact,
+        eq(schema.conversation.contactId, schema.contact.id)
+      )
+      .where(eq(schema.conversation.id, input.conversationId))
+      .limit(1);
+    const row = rows[0];
+    if (!row || row.conversation.organizationId !== input.organizationId) {
+      throw new SendError("meta_error", "Conversación no encontrada");
+    }
+    if (row.conversation.isTest) {
+      throw new SendError(
+        "sandbox_violation",
+        "Conversación de prueba del Laboratorio: el envío real está prohibido"
+      );
+    }
+    const recipient = row.contact.phone
+      ? normalizeRecipient(row.contact.phone)
+      : row.contact.waUserId;
+    if (!recipient) {
+      throw new SendError(
+        "meta_error",
+        "El contacto no tiene teléfono ni identidad de WhatsApp utilizable"
+      );
+    }
+    const env = getEnv();
+    if (!env.EVOLUTION_INSTANCE_TOKEN) {
+      throw new SendError(
+        "not_connected",
+        "No hay token de instancia de Evolution configurado"
+      );
+    }
+
+    // Persistir el asset local (fuente durable de la preview) antes de enviar.
+    const assetId = newId("mediaAsset");
+    const storagePath = await saveMediaFile(
+      input.organizationId,
+      assetId,
+      input.file.data
+    );
+    const assetRows = await db
+      .insert(schema.mediaAsset)
+      .values({
+        id: assetId,
+        organizationId: input.organizationId,
+        kind,
+        mimeType: input.file.mimeType,
+        fileName: input.file.fileName ?? null,
+        fileSize: input.file.data.byteLength,
+        caption: input.caption ?? null,
+        storagePath,
+        fetchStatus: "available",
+      })
+      .returning();
+    const asset = assetRows[0]!;
+
+    try {
+      const waMessageId = (
+        await sendEvolutionMedia({
+          organizationId: input.organizationId,
+          to: recipient,
+          kind,
+          file: input.file,
+          caption: input.caption,
+          credentials: {
+            provider: "evolution",
+            instanceToken: env.EVOLUTION_INSTANCE_TOKEN,
+          },
+        })
+      ).waMessageId;
+
+      const messageId = await persistOutbound({
+        organizationId: input.organizationId,
+        conversationId: input.conversationId,
+        waMessageId,
+        type: kind,
+        text: null,
+        status: "pending",
+        origin: "operator",
+        mediaAssetId: assetId,
+        media: asset,
+      });
+      return { messageId };
+    } catch (err) {
+      let sendErr: SendError;
+      if (err instanceof SendChannelError) {
+        const code: SendError["code"] =
+          err.code === "not_connected"
+            ? "not_connected"
+            : err.code === "reconnect_required"
+              ? "reconnect_required"
+              : err.code === "window_closed"
+                ? "window_closed"
+                : err.code === "channel_unavailable"
+                  ? "meta_unavailable"
+                  : "upload_failed";
+        sendErr = new SendError(code, err.message);
+      } else {
+        sendErr = new SendError(
+          "upload_failed",
+          "No se pudo subir el adjunto a WhatsApp"
+        );
+      }
+      sendErr.messageId = await persistOutbound({
+        organizationId: input.organizationId,
+        conversationId: input.conversationId,
+        waMessageId: null,
+        type: kind,
+        text: null,
+        status: "failed",
+        error: sendErr.message,
+        origin: "operator",
+        mediaAssetId: assetId,
+        media: asset,
+      });
+      throw sendErr;
+    }
+  }
 
   const { credentials, recipient } = await prepareSend(
     input.conversationId,
