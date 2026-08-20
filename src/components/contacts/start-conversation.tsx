@@ -34,9 +34,25 @@ export function StartConversation({
   const [vars, setVars] = useState<string[]>([]);
   const [enviando, setEnviando] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Canal activo. "evolution" (WhatsApp Web) permite texto libre sin plantilla.
+  const [channel, setChannel] = useState<"meta" | "evolution" | null>(null);
+  const [textoLibre, setTextoLibre] = useState("");
 
   useEffect(() => {
     void (async () => {
+      // Canal: meta o evolution. Si falla, se asume meta (comportamiento clásico).
+      const cfg = await fetch("/api/settings/whatsapp")
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null);
+      const provider = cfg?.channel === "evolution" ? "evolution" : "meta";
+      setChannel(provider);
+
+      if (provider === "evolution") {
+        // Evolution no usa plantillas: se escribe texto libre directamente.
+        setTemplates([]);
+        return;
+      }
+
       const res = await fetch("/api/templates").catch(() => null);
       if (!res?.ok) return setTemplates([]);
       const data = (await res.json()) as { templates: TemplateDto[] };
@@ -52,25 +68,59 @@ export function StartConversation({
   async function enviar() {
     setEnviando(true);
     setError(null);
+    const body = JSON.stringify(
+      channel === "evolution"
+        ? { kind: "text", text: textoLibre }
+        : {
+            kind: "template",
+            templateId,
+            variables: nVars > 0 ? vars.slice(0, nVars) : undefined,
+          }
+    );
     const res = await fetch(`/api/contacts/${contactId}/start-conversation`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        templateId,
-        variables: nVars > 0 ? vars.slice(0, nVars) : undefined,
-      }),
+      body,
     }).catch(() => null);
     setEnviando(false);
     const data = (await res?.json().catch(() => null)) as
       | { error?: { message?: string }; conversationId?: string }
       | null;
     if (!res?.ok) {
-      // El fallo de Meta se explica aquí mismo (plantilla en pausa, número
-      // que no la recibe…) en vez de perderse.
+      // El fallo se explica aquí mismo en vez de perderse.
       setError(data?.error?.message ?? "No se pudo iniciar la conversación");
       return;
     }
     onStarted(data?.conversationId ?? "");
+  }
+
+  // Canal Evolution: texto libre sin plantilla (WhatsApp Web no lo restringe).
+  if (channel === "evolution") {
+    return (
+      <div className="space-y-2">
+        <p className="text-xs text-text-3">
+          Este contacto nunca te ha escrito. En el canal Evolution (WhatsApp
+          Web) puedes escribirle texto libre directamente.
+        </p>
+        <textarea
+          value={textoLibre}
+          aria-label="Mensaje inicial"
+          rows={3}
+          placeholder="Escribe tu primer mensaje…"
+          className="h-auto w-full resize-none rounded-md border border-input bg-card px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-brand-soft"
+          onChange={(e) => setTextoLibre(e.target.value)}
+        />
+        <Button
+          size="sm"
+          disabled={enviando || !textoLibre.trim()}
+          onClick={() => void enviar()}
+        >
+          <Send className="mr-1.5 h-3.5 w-3.5" strokeWidth={1.7} />
+          {enviando ? "Enviando…" : "Enviar mensaje"}
+        </Button>
+        {error && <p className="text-xs text-danger-text">{error}</p>}
+      </div>
+    );
   }
 
   if (templates === null) {

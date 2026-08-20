@@ -200,13 +200,13 @@ export function ContactsClient() {
                   >
                     Editar
                   </Button>
-                  {/* A quien nunca escribió hay que abrirle la conversación con
-                      una plantilla: es regla de Meta, no del CRM. */}
+                  {/* A quien nunca escribió: en Meta se abre con plantilla;
+                      en Evolution (WhatsApp Web) se escribe texto libre. */}
                   <Button
                     variant="ghost"
                     size="icon"
                     aria-label="Escribir primero"
-                    title="Escribir primero (con plantilla)"
+                    title="Escribir primero"
                     onClick={() => setEscribiendo(c)}
                   >
                     <Send className="h-4 w-4" />

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { apiError, parseBody, withAuth } from "@/lib/api";
+import { getEnv } from "@/lib/env";
 import {
   getCredentialsByOrg,
   saveCredentials,
@@ -10,9 +11,17 @@ import { subscribeAppToWaba, testConnection } from "@/server/whatsapp/connect";
 export const dynamic = "force-dynamic";
 
 export const GET = withAuth(async (session) => {
+  // Canal activo: "meta" (Cloud API) o "evolution" (Evolution GO/API). El
+  // frontend lo usa para no imponer reglas de Meta (plantilla 24h) en Evolution.
+  const channel = getEnv().CHANNEL_PROVIDER;
   const creds = await getCredentialsByOrg(session.organizationId);
-  if (!creds) return Response.json({ connection: null });
+  if (!creds)
+    return Response.json({
+      channel,
+      connection: null,
+    });
   return Response.json({
+    channel,
     connection: {
       wabaId: creds.wabaId,
       phoneNumberId: creds.phoneNumberId,
