@@ -1,6 +1,7 @@
 import { eq } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
+import { getEnv } from "@/lib/env";
 import { graphRequest, MetaApiError, normalizeRecipient } from "@/lib/meta/client";
 import { publish } from "@/server/events/bus";
 import {
@@ -15,6 +16,8 @@ import {
   uploadGraphMedia,
   validateOutgoing,
 } from "@/server/whatsapp/media";
+import { SendChannelError } from "@/server/whatsapp/channel";
+import { sendEvolutionText } from "@/server/whatsapp/evolution";
 
 /** Error tipado del envío; `code` mapea a HTTP en la capa de API. */
 export class SendError extends Error {
@@ -167,6 +170,87 @@ export async function sendText(input: {
   text: string;
   aiGenerated?: boolean;
 }): Promise<SendResult> {
+  // Canal Evolution: sin ventana de 24h, sin credenciales de Meta.
+  if (getEnv().CHANNEL_PROVIDER === "evolution") {
+    const db = getDb();
+    const rows = await db
+      .select({ conversation: schema.conversation, contact: schema.contact })
+      .from(schema.conversation)
+      .innerJoin(
+        schema.contact,
+        eq(schema.conversation.contactId, schema.contact.id)
+      )
+      .where(eq(schema.conversation.id, input.conversationId))
+      .limit(1);
+    const row = rows[0];
+    if (!row || row.conversation.organizationId !== input.organizationId) {
+      throw new SendError("meta_error", "Conversación no encontrada");
+    }
+    if (row.conversation.isTest) {
+      throw new SendError(
+        "sandbox_violation",
+        "Conversación de prueba del Laboratorio: el envío real está prohibido"
+      );
+    }
+    const recipient = row.contact.phone
+      ? normalizeRecipient(row.contact.phone)
+      : row.contact.waUserId;
+    if (!recipient) {
+      throw new SendError(
+        "meta_error",
+        "El contacto no tiene teléfono ni identidad de WhatsApp utilizable"
+      );
+    }
+    const env = getEnv();
+    if (!env.EVOLUTION_INSTANCE_TOKEN) {
+      throw new SendError(
+        "not_connected",
+        "No hay token de instancia de Evolution configurado"
+      );
+    }
+    let waMessageId: string;
+    try {
+      const result = await sendEvolutionText({
+        organizationId: input.organizationId,
+        to: recipient,
+        text: input.text,
+        credentials: {
+          provider: "evolution",
+          instanceToken: env.EVOLUTION_INSTANCE_TOKEN,
+        },
+      });
+      waMessageId = result.waMessageId;
+    } catch (err) {
+      if (err instanceof SendChannelError) {
+        const code: SendError["code"] =
+          err.code === "not_connected"
+            ? "not_connected"
+            : err.code === "reconnect_required"
+              ? "reconnect_required"
+              : err.code === "window_closed"
+                ? "window_closed"
+                : err.code === "channel_unavailable"
+                  ? "meta_unavailable"
+                  : "meta_error";
+        throw new SendError(code, err.message);
+      }
+      throw err;
+    }
+
+    const messageId = await persistOutbound({
+      organizationId: input.organizationId,
+      conversationId: input.conversationId,
+      waMessageId,
+      type: "text",
+      text: input.text,
+      status: "pending",
+      aiGenerated: input.aiGenerated,
+      origin: input.aiGenerated ? "ai" : "operator",
+    });
+    return { messageId };
+  }
+
+  // Canal Meta: preparación con ventana de 24h + credenciales de Graph.
   const { credentials, recipient } = await prepareSend(
     input.conversationId,
     input.organizationId
