@@ -22,6 +22,12 @@ const envSchema = z.object({
   META_APP_SECRET: z.string().optional(),
   META_GRAPH_API_VERSION: z.string().default("v25.0"),
   META_GRAPH_BASE_URL: z.string().url().default("https://graph.facebook.com"),
+  // Canal de WhatsApp: "meta" (Cloud API) o "evolution" (Evolution GO/API).
+  CHANNEL_PROVIDER: z.enum(["meta", "evolution"]).default("meta"),
+  // Evolution GO/API (solo si CHANNEL_PROVIDER=evolution).
+  EVOLUTION_BASE_URL: z.string().url().optional(),
+  // Token de la instancia de Evolution (header apikey para envío).
+  EVOLUTION_INSTANCE_TOKEN: z.string().optional(),
   OPENROUTER_API_TOKEN: z.string().optional(),
   OPENROUTER_BASE_URL: z.string().url().default("https://openrouter.ai/api"),
   OPENROUTER_MODEL: z.string().optional(),
