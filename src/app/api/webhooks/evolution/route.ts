@@ -44,10 +44,17 @@ function path(obj: Record<string, unknown> | null | undefined, ...keys: string[]
 
 /** Extrae el número (wa_id) del remitente desde el payload de Evolution. */
 function extractSender(data: Record<string, unknown> | undefined): string | null {
-  // Campos comunes: sender, Sender, key.remoteJid, chat, etc.
-  const sender = path(data, "sender") ?? path(data, "Sender") ?? path(data, "key", "remoteJid");
+  // whatsmeow serializa events.Message con estructura anidada:
+  //   data.Info.Sender / data.Info.Chat  (JID: "584128009482@s.whatsapp.net")
+  // Otras variantes: data.Sender, data.sender, data.key.remoteJid.
+  const sender =
+    path(data, "Info", "Sender") ??
+    path(data, "Info", "Chat") ??
+    path(data, "Sender") ??
+    path(data, "sender") ??
+    path(data, "key", "remoteJid");
   if (typeof sender !== "string" || !sender) return null;
-  // Evolution manda "584128840350@s.whatsapp.net" o "5215512345678@s.whatsapp.net"
+  // "584128009482@s.whatsapp.net" o LID "278541530865777@lid"
   const number = (sender.split("@")[0] ?? sender).trim();
   return number || null;
 }
@@ -64,6 +71,23 @@ function extractText(message: unknown): string | null {
   const video = m.videoMessage as Record<string, unknown> | undefined;
   if (video && typeof video.caption === "string") return video.caption;
   return null;
+}
+
+/** Extrae el ID del mensaje. */
+function extractMessageId(data: Record<string, unknown> | undefined): string | null {
+  const id =
+    path(data, "Info", "ID") ??
+    path(data, "key", "id") ??
+    path(data, "id") ??
+    path(data, "message", "key", "id");
+  return typeof id === "string" && id ? id : null;
+}
+
+/** Extrae el timestamp (segundos epoch) del mensaje. */
+function extractTimestamp(data: Record<string, unknown> | undefined): string {
+  const ts = path(data, "Info", "Timestamp") ?? path(data, "messageTimestamp");
+  if (typeof ts === "number" && ts > 0) return String(ts);
+  return String(Math.floor(Date.now() / 1000));
 }
 
 export async function POST(req: Request) {
@@ -85,19 +109,26 @@ export async function POST(req: Request) {
   if (eventName === "message") {
     after(async () => {
       try {
+        // whatsmeow serializa events.Message con: data.Info (MessageInfo),
+        // data.Message (el contenido waE2E.Message), data.MessageTimestamp.
         const sender = extractSender(data);
-        if (!sender) return;
-        const messageId =
-          path(data, "key", "id") ??
-          path(data, "id") ??
-          path(data, "message", "key", "id") ??
-          `evo-${Date.now()}`;
-        const text = extractText(data.message);
+        if (!sender) {
+          console.warn(
+            `[evolution-webhook] sin remitente en el payload (event=${eventName}), data keys: ${Object.keys(data).join(",")}`
+          );
+          return;
+        }
+        const messageId = extractMessageId(data) ?? `evo-${Date.now()}`;
+        const text = extractText(path(data, "Message") ?? path(data, "message"));
 
-        // Buscar la organización por instanceToken. En modo "evolution" no hay
-        // tabla de credenciales de Meta; resolvemos por el token de instancia.
+        // Buscar la organización por instanceToken.
         const orgId = await resolveOrgFromInstanceToken(payload.instanceToken);
-        if (!orgId) return;
+        if (!orgId) {
+          console.warn(
+            `[evolution-webhook] no se pudo resolver la organización (instanceToken=${payload.instanceToken})`
+          );
+          return;
+        }
 
         // Construir identidad resiliente a partir del número de WhatsApp.
         const phone = normalizeMx(sender);
@@ -108,13 +139,17 @@ export async function POST(req: Request) {
           profileName: null,
         };
 
+        console.log(
+          `[evolution-webhook] ingest ${sender} msg=${messageId} text=${text ? JSON.stringify(text.slice(0, 60)) : "null"}`
+        );
+
         await ingestInboundMessage({
           organizationId: orgId,
           identity,
           waMessageId: String(messageId),
           type: "text",
           text,
-          timestamp: String(data.messageTimestamp ?? Math.floor(Date.now() / 1000)),
+          timestamp: extractTimestamp(data),
         });
       } catch (err) {
         console.error("[evolution-webhook] error procesando mensaje:", err);
