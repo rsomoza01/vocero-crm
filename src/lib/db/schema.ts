@@ -73,6 +73,9 @@ export const organization = pgTable("organization", {
   logo: text("logo"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   metadata: text("metadata"),
+  // providerId de Firebase del catálogo de la farmacia (005-agente-farma-firebase).
+  // Null si el tenant no es farmacia (no tiene catálogo).
+  providerId: text("provider_id"),
 });
 
 export const member = pgTable("member", {

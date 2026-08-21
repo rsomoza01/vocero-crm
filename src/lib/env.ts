@@ -38,6 +38,13 @@ const envSchema = z.object({
   // API key de un cerebro externo que conduzca la conversación por /api/bot/*.
   // Sin ella, toda esa superficie responde 401.
   BOT_API_KEY: z.string().optional(),
+  // Firebase (catálogo de medicamentos/precios) — service account de solo lectura.
+  // Todos opcionales: sin credenciales, /api/bot/products responde 503.
+  FIREBASE_PROJECT_ID: z.string().optional(),
+  FIREBASE_CLIENT_EMAIL: z.string().optional(),
+  FIREBASE_PRIVATE_KEY: z.string().optional(),
+  FIREBASE_COLLECTION_PRODUCTS: z.string().default("products-providers"),
+  FIREBASE_COLLECTION_PROVIDERS: z.string().default("provider"),
   // 008: volumen local de adjuntos (constitución II: sin S3/R2).
   MEDIA_DIR: z.string().default("./.dev-media"),
   NODE_ENV: z.string().default("development"),
