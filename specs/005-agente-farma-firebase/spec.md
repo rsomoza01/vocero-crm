@@ -16,7 +16,17 @@
 
 El CRM se vuelve farmacéutico y multi-tenant: cada negocio contratante es una organización con su propio agente. La fuente de verdad de precios y disponibilidad NO vive en el CRM sino en **Firebase**, con dos collections: `provider` (datos de la farmacia) y `products-providers` (productos con precio/disponibilidad por `providerId`). El agente externo (`nea-agent`) consulta estos datos **filtrado por el `providerId`** del tenant al que sirve, y responde a los clientes por WhatsApp con disponibilidad y mejor precio **sin inventar precios** (regla anti-alucinación: la fuente es `products-providers`).
 
-Cada farmacia contratante tiene **un solo `providerId`** (solo su propio catálogo) y el CRM usa **una sola service account de solo-lectura** compartida para acceder a Firebase.
+Cada farmacia contratada tiene **un solo `providerId`** (solo su propio catálogo) y el CRM usa **una sola service account de solo-lectura** compartida para acceder a Firebase.
+
+## Clarifications
+
+### Session 2026-08-20
+
+- Q: ¿Cuáles son los nombres exactos de las collections de Firebase? → A: `products-providers` y `provider` (nombres reales del bot Gentefarma).
+- Q: ¿El agente se despliega por farmacia o en una sola instancia? → A: Una instancia de `nea-agent` por cada farmacia (aislada).
+- Q: ¿Cómo se resuelve el `providerId` del tenant? → A: Variable de entorno de la instancia (`PROVIDER_ID`), fija y explícita.
+- Q: ¿Se incluye OCR de recetas en el MVP? → A: Sí, OCR de recetas está en el MVP (User Story 3, FR-8).
+- Q: ¿Cómo se maneja el precio y el fee? → A: Se muestra USD y Bs (precio base convertido con tasa BCV), **sin aplicar fee comercial**.
 
 ---
 
@@ -77,19 +87,21 @@ El cliente envía una foto de su receta médica. El agente extrae los medicament
 
 ### Functional Requirements
 
-- **FR-1**: El CRM MUST exponer un endpoint `/api/bot/products` que consulte Firebase `products` filtrando por el `providerId` del tenant y devuelva disponibilidad y precio.
+- **FR-1**: El CRM MUST exponer un endpoint `/api/bot/products` que consulte Firebase (collection `products-providers`) filtrando por el `providerId` del tenant y devuelva disponibilidad y precio.
 - **FR-2**: El CRM MUST asociar cada organización (tenant) con un `providerId` de Firebase (migración de la tabla `organization`).
 - **FR-3**: El CRM MUST consultar Firebase usando una service account de solo-lectura compartida (no por tenant).
 - **FR-4**: El agente externo (`nea-agent`) MUST tener un rol farmacéutico cuyo system prompt responda consultas de disponibilidad y mejor precio, consultando el catálogo por tool y NUNCA inventando precios.
 - **FR-5**: El agente MUST tener herramientas de consulta de medicamento: buscar por nombre, comparar precios (si el tenant tiene varios provider), sugerir genéricos, y devolver info del proveedor (dirección/horario).
-- **FR-6**: El agente MUST incorporar las reglas de negocio del bot Gentefarma convertidas a Markdown como conocimiento (intención, carrito, OCR, mensajes, precio USD/Bs con fee).
+- **FR-6**: El agente MUST incorporar las reglas de negocio del bot Gentefarma convertidas a Markdown como conocimiento (intención, carrito, OCR, mensajes, precio USD/Bs con conversión por tasa BCV).
+- **FR-9**: El agente MUST mostrar el precio en USD (precio base del catálogo) y en Bs convertido con la tasa BCV, **sin aplicar ningún cargo/fee adicional** (el precio mostrado es el precio base del catálogo).
 - **FR-7**: El agente MUST escalar a humano (`handoff`) cuando la consulta sea médica seria, requiera receta nueva, o el medicamento no esté en el catálogo y no se pueda confirmar.
+- **FR-8**: El agente MUST procesar recetas médicas por foto (OCR) en el MVP: extraer los medicamentos de la imagen, buscar cada uno en el catálogo y responder disponibilidad/precio.
 
 ### Key Entities
 
 - **Organization (tenant)**: negocio que contrata el CRM; tiene un `providerId` de Firebase.
 - **provider**: collection en Firebase con info de la farmacia (id/nombre/dirección/horario/ciudad).
-- **products-providers**: collection en Firebase con producto × provider (providerId, nombre, presentación, laboratorio, precio, disponibilidad, requiereReceta).
+- **products-providers**: collection en Firebase con producto × provider (providerId, nombre, presentación, laboratorio, precio, disponibilidad, requiereReceta). Nombre real confirmado del bot Gentefarma.
 - **AgentProfile**: perfil del agente farmacéutico configurable por organización.
 
 ## Success Criteria
@@ -103,8 +115,7 @@ El cliente envía una foto de su receta médica. El agente extrae los medicament
 
 ## Assumptions
 
-- La collection Firebase se llama `products` y `provider`; si el nombre real es distinto, se ajusta la integración (campo por env).
-- El precio se muestra en USD y Bs con tasa BCV, y el fee comercial ya está incluido en el precio mostrado.
+- La collection Firebase se llama `products-providers` y `provider` (nombres reales del bot Gentefarma). El precio se muestra en USD y Bs convertido con tasa BCV, **sin cargo comercial (fee)**: se muestra el precio base del catálogo.
 - Cada farmacia tiene un solo `providerId` (MVP; no se compara entre varias droguerías en v1).
 - Una service account de solo-lectura compartida basta para el acceso a Firebase.
 - El agente se implementa en `nea-agent` (rol farmacéutico) y el CRM en `vocero-crm`; el catálogo y la reglas de negocio (Gentefarma) se cargan como conocimiento del agente.
