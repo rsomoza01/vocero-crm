@@ -20,8 +20,8 @@
 
 **Purpose**: Config de Firebase Admin SDK y variables de entorno.
 
-- [ ] T001 Añadir dependencia `firebase-admin` en `package.json` (pnpm add firebase-admin)
-- [ ] T002 [P] Añadir vars Firebase a `src/lib/env.ts`: `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`, `FIREBASE_COLLECTION_PRODUCTS`, `FIREBASE_COLLECTION_PROVIDERS`
+- [X] T001 Añadir dependencia `firebase-admin` en `package.json` (pnpm add firebase-admin)
+- [X] T002 [P] Añadir vars Firebase a `src/lib/env.ts`: `FIREBASE_PROJECT_ID`, `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY`, `FIREBASE_COLLECTION_PRODUCTS`, `FIREBASE_COLLECTION_PROVIDERS`
 
 ---
 
@@ -29,10 +29,10 @@
 
 **⚠️ CRITICAL**: Sin el cliente Firebase y la migración de `provider_id`, ninguna user story funciona.
 
-- [ ] T003 Crear `src/server/catalog/firebase.ts` — cliente Firestore (firebase-admin) con inicialización lazy y credenciales desde env, SOLO lectura.
-- [ ] T004 [P] Añadir columna `provider_id` (text, nullable) a `organization` en `src/lib/db/schema.ts`
-- [ ] T005 [P] Generar y aplicar migración: `pnpm db:generate && pnpm db:migrate`
-- [ ] T006 Crear `src/server/catalog/query.ts` — consultas: `getProductsByProvider(providerId, q, limit)` y `getProviderInfo(providerId)` filtrando por `providerId` en Firestore.
+- [X] T003 Crear `src/server/catalog/firebase.ts` — cliente Firestore (firebase-admin) con inicialización lazy y credenciales desde env, SOLO lectura.
+- [X] T004 [P] Añadir columna `provider_id` (text, nullable) a `organization` en `src/lib/db/schema.ts`
+- [X] T005 [P] Generar y aplicar migración: `pnpm db:generate && pnpm db:migrate`
+- [X] T006 Crear `src/server/catalog/query.ts` — consultas: `getProductsByProvider(providerId, q, limit)` y `getProviderInfo(providerId)` filtrando por `providerId` en Firestore. (Implementado dentro de `firebase.ts`)
 
 **Checkpoint**: Fundación lista — usuario stories pueden comenzar.
 
@@ -50,9 +50,9 @@
 
 ### Implementation for User Story 1
 
-- [ ] T008 [US1] Crear `src/app/api/bot/products/route.ts` — `GET /api/bot/products?q=&providerId=&limit=` con `requireBotKey`, resuelve providerId por org si falta, responde `{products, provider}` o error tipado (401/409/422/404/503).
-- [ ] T009 [US1] Resolver `providerId` por org: modificar `resolveInstanceOrg` (o helper) para leer `organization.provider_id` en `src/server/bot/auth.ts`
-- [ ] T010 [US1] Manejar 422 `no_catalogo` cuando el tenant no tiene providerId configurado.
+- [X] T008 [US1] Crear `src/app/api/bot/products/route.ts` — `GET /api/bot/products?q=&providerId=&limit=` con `requireBotKey`, resuelve providerId por org si falta, responde `{products, provider}` o error tipado (401/409/422/404/503).
+- [X] T009 [US1] Resolver `providerId` por org: modificar `resolveInstanceOrg` (o helper) para leer `organization.provider_id` en `src/server/bot/auth.ts`
+- [X] T010 [US1] Manejar 422 `no_catalogo` cuando el tenant no tiene providerId configurado.
 
 **Checkpoint**: User Story 1 funcional — el bot puede consultar disponibilidad/precio.
 
@@ -79,8 +79,8 @@
 
 ### Implementation for User Story 3
 
-- [ ] T013 [P] [US3] Permitir `q` múltiple (coma separado o `q[]`) en `src/app/api/bot/products/route.ts` para consultar varios medicamentos de una receta.
-- [ ] T014 [US3] Devolver `missing[]` para los medicamentos que no están en el catálogo (para que el agente sea honesto).
+- [X] T013 [P] [US3] Permitir `q` múltiple (coma separado o `q[]`) en `src/app/api/bot/products/route.ts` para consultar varios medicamentos de una receta.
+- [X] T014 [US3] Devolver `missing[]` para los medicamentos que no están en el catálogo (para que el agente sea honesto).
 
 **Checkpoint**: US3 funcional — el agente responde varios medicamentos de una receta.
 
