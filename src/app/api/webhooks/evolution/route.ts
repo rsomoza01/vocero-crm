@@ -151,16 +151,21 @@ function extractImage(
   const m = message as Record<string, unknown>;
   const image = m.imageMessage as Record<string, unknown> | undefined;
   if (!image) return null;
-  // Evolution GO envía la imagen en `imageMessage.URL` (mayúscula) o
-  // `imageMessage.url` (minúscula). Leer ambos.
+  // Evolution GO puede mandar la imagen ya decodificada en el campo raíz
+  // `base64` (nivel superior del mensaje), o como URL en imageMessage.URL.
+  // El campo raíz `base64` es preferible: la URL de imageMessage devuelve el
+  // blob CIFRADO de WhatsApp (mediaKey), no la imagen decodificada.
+  const rootBase64 = typeof m.base64 === "string" && m.base64 ? m.base64 : null;
   const url = (image.URL ?? image.url) as string | undefined;
-  if (typeof url !== "string" || !url) return null;
-  // Evolution puede mandar la imagen como base64 (data:...) o como URL.
-  let base64 = url;
-  if (url.startsWith("data:")) {
-    const comma = url.indexOf(",");
-    if (comma >= 0) base64 = url.slice(comma + 1);
+  let base64: string | null = null;
+  if (rootBase64) {
+    base64 = rootBase64.startsWith("data:")
+      ? rootBase64.slice(rootBase64.indexOf(",") + 1)
+      : rootBase64;
+  } else if (typeof url === "string" && url) {
+    base64 = url.startsWith("data:") ? url.slice(url.indexOf(",") + 1) : url;
   }
+  if (!base64) return null;
   const mime =
     typeof image.mimetype === "string" && image.mimetype
       ? image.mimetype
@@ -310,6 +315,18 @@ export async function POST(req: Request) {
         // vez de ingestar como texto plano (que no tiene la imagen).
         const rawMessage = path(data, "Message") ?? path(data, "message");
         const image = extractImage(rawMessage);
+        if (image) {
+          // Diagnóstico: magic number del base64 que se va a enviar a nea-agent.
+          try {
+            const buf = Buffer.from(image.base64, "base64");
+            const magic = buf.subarray(0, 8).toString("hex");
+            console.log(
+              `[evolution-webhook] imagen detectada: base64Len=${image.base64.length} bytes=${buf.length} magic=${magic}`
+            );
+          } catch {
+            console.log(`[evolution-webhook] imagen detectada: base64Len=${image.base64.length}`);
+          }
+        }
         if (!image && rawMessage) {
           // Debug: qué tiene el mensaje para entender por qué no se detectó
           const msgKeys = typeof rawMessage === "object" && rawMessage !== null
