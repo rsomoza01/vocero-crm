@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { AgentGlobalToggle } from "@/components/settings/agent-global-toggle";
 
 type Connection = {
   wabaId: string;
@@ -87,6 +88,8 @@ export function WhatsappWizard() {
       )}
 
       <ConnectForm existing={connection} onSaved={() => void refetch()} />
+
+      <AgentGlobalToggle />
 
       {webhook && <WebhookCard webhook={webhook} />}
     </div>
