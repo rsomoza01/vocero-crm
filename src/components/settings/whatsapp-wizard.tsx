@@ -34,6 +34,7 @@ type WebhookInfo = {
 export function WhatsappWizard() {
   const [connection, setConnection] = useState<Connection | null>(null);
   const [webhook, setWebhook] = useState<WebhookInfo | null>(null);
+  const [channel, setChannel] = useState<string>("meta");
   const [loaded, setLoaded] = useState(false);
 
   const refetch = useCallback(async () => {
@@ -41,7 +42,10 @@ export function WhatsappWizard() {
       fetch("/api/settings/whatsapp").then((r) => (r.ok ? r.json() : null)),
       fetch("/api/settings/webhook").then((r) => (r.ok ? r.json() : null)),
     ]).catch(() => [null, null]);
-    if (c) setConnection(c.connection);
+    if (c) {
+      setConnection(c.connection);
+      setChannel(c.channel ?? "meta");
+    }
     if (w) setWebhook(w);
     setLoaded(true);
   }, []);
@@ -56,42 +60,48 @@ export function WhatsappWizard() {
 
   return (
     <div className="max-w-3xl space-y-6">
-      {connection?.status === "reconnect_required" && (
-        <div className="flex items-start gap-2 rounded-lg border border-danger-soft bg-danger-tint p-4 text-sm">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
-          <div>
-            <p className="font-medium text-danger-text">
-              El token de WhatsApp expiró o fue revocado.
-            </p>
-            <p className="text-danger-text opacity-80">
-              Los envíos están pausados. Pega un token nuevo abajo y prueba la
-              conexión para reconectar.
-            </p>
-          </div>
-        </div>
-      )}
+      {channel === "evolution" ? (
+        <EvolutionConnectForm onSaved={() => void refetch()} />
+      ) : (
+        <>
+          {connection?.status === "reconnect_required" && (
+            <div className="flex items-start gap-2 rounded-lg border border-danger-soft bg-danger-tint p-4 text-sm">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+              <div>
+                <p className="font-medium text-danger-text">
+                  El token de WhatsApp expiró o fue revocado.
+                </p>
+                <p className="text-danger-text opacity-80">
+                  Los envíos están pausados. Pega un token nuevo abajo y prueba la
+                  conexión para reconectar.
+                </p>
+              </div>
+            </div>
+          )}
 
-      {connection && connection.status === "connected" && (
-        <div className="flex items-center gap-3 rounded-lg border border-success-soft bg-success-tint p-4">
-          <CheckCircle2 className="h-5 w-5 text-success" />
-          <div className="flex-1 text-sm">
-            <p className="font-medium text-success-text">
-              Número conectado: {connection.displayPhoneNumber ?? connection.phoneNumberId}
-            </p>
-            <p className="text-success-text opacity-80">
-              {connection.verifiedName ? `${connection.verifiedName} · ` : ""}
-              token …{connection.tokenLast4}
-            </p>
-          </div>
-          <Badge variant="success">Conectado</Badge>
-        </div>
-      )}
+          {connection && connection.status === "connected" && (
+            <div className="flex items-center gap-3 rounded-lg border border-success-soft bg-success-tint p-4">
+              <CheckCircle2 className="h-5 w-5 text-success" />
+              <div className="flex-1 text-sm">
+                <p className="font-medium text-success-text">
+                  Número conectado: {connection.displayPhoneNumber ?? connection.phoneNumberId}
+                </p>
+                <p className="text-success-text opacity-80">
+                  {connection.verifiedName ? `${connection.verifiedName} · ` : ""}
+                  token …{connection.tokenLast4}
+                </p>
+              </div>
+              <Badge variant="success">Conectado</Badge>
+            </div>
+          )}
 
-      <ConnectForm existing={connection} onSaved={() => void refetch()} />
+          <ConnectForm existing={connection} onSaved={() => void refetch()} />
+
+          {webhook && <WebhookCard webhook={webhook} />}
+        </>
+      )}
 
       <AgentGlobalToggle />
-
-      {webhook && <WebhookCard webhook={webhook} />}
     </div>
   );
 }
@@ -265,6 +275,110 @@ function ConnectForm({
             {saving ? "Guardando…" : "Guardar conexión"}
           </Button>
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function EvolutionConnectForm({ onSaved }: { onSaved: () => void }) {
+  const [existing, setExisting] = useState<{
+    instanceName: string;
+    instanceId: string | null;
+    jid: string | null;
+    status: string;
+    tokenLast4: string;
+  } | null>(null);
+  const [instanceName, setInstanceName] = useState("");
+  const [token, setToken] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    void fetch("/api/settings/whatsapp/evolution")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d?.connection) {
+          setExisting(d.connection);
+          setInstanceName(d.connection.instanceName);
+        }
+        setLoaded(true);
+      })
+      .catch(() => setLoaded(true));
+  }, []);
+
+  async function save() {
+    setSaving(true);
+    setSaveError(null);
+    const res = await fetch("/api/settings/whatsapp/evolution", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ instanceName, instanceToken: token }),
+    }).catch(() => null);
+    setSaving(false);
+    if (!res?.ok) {
+      const data = (await res?.json().catch(() => null)) as { error?: { message?: string } } | null;
+      setSaveError(data?.error?.message ?? "No se pudo guardar la instancia");
+      return;
+    }
+    setToken("");
+    onSaved();
+  }
+
+  if (!loaded) {
+    return <p className="text-sm text-muted-foreground">Cargando…</p>;
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Instancia de Evolution GO</CardTitle>
+        <CardDescription>
+          Configura el nombre de la instancia y el token de Evolution GO/API.
+          El token se almacena cifrado y se usa para enviar y recibir mensajes.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {existing && (
+          <div className="flex items-center gap-3 rounded-lg border border-success-soft bg-success-tint p-4">
+            <CheckCircle2 className="h-5 w-5 text-success" />
+            <div className="flex-1 text-sm">
+              <p className="font-medium text-success-text">
+                Instancia: {existing.instanceName}
+              </p>
+              <p className="text-success-text opacity-80">
+                {existing.jid ? `${existing.jid} · ` : ""}token …{existing.tokenLast4}
+              </p>
+            </div>
+            <Badge variant="success">Conectado</Badge>
+          </div>
+        )}
+
+        <div className="space-y-1.5">
+          <Label htmlFor="evo-instance">Nombre de la instancia</Label>
+          <Input
+            id="evo-instance"
+            placeholder="FarmaHogar"
+            value={instanceName}
+            onChange={(e) => setInstanceName(e.target.value)}
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="evo-token">Token de la instancia</Label>
+          <Input
+            id="evo-token"
+            type="password"
+            placeholder={existing ? `Guardado (…${existing.tokenLast4}) — pega uno nuevo para cambiarlo` : "Token de Evolution GO"}
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+          />
+        </div>
+
+        {saveError && <p className="text-sm text-destructive">{saveError}</p>}
+
+        <Button disabled={!instanceName.trim() || !token.trim() || saving} onClick={() => void save()}>
+          {saving ? "Guardando…" : "Guardar instancia"}
+        </Button>
       </CardContent>
     </Card>
   );

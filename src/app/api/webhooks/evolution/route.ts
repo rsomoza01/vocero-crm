@@ -323,22 +323,27 @@ async function sendText(orgId: string, to: string, text: string): Promise<void> 
 }
 
 /**
- * Resuelve la organización de un instanceToken. En el modo Evolution usamos
- * el token de instancia global; si no coincide, devolvemos null.
+ * Resuelve la organización de un instanceToken. Multi-tenant: busca el hash
+ * del token en evolution_credentials (cada farmacia = una instancia). Si no
+ * está, cae al token global del env (legacy).
  */
 async function resolveOrgFromInstanceToken(
   instanceToken: string | undefined,
 ): Promise<string | null> {
-  const env = getEnv();
   if (!instanceToken) return null;
-  if (instanceToken !== env.EVOLUTION_INSTANCE_TOKEN) {
-    console.warn(
-      `[evolution-webhook] instanceToken no coincide con EVOLUTION_INSTANCE_TOKEN`
-    );
-    return null;
+  const { getOrgByEvolutionTokenHash } = await import("@/server/whatsapp/evolution-credentials");
+  const orgId = await getOrgByEvolutionTokenHash(instanceToken);
+  if (orgId) return orgId;
+  // Legacy: token global del env.
+  const env = getEnv();
+  if (instanceToken === env.EVOLUTION_INSTANCE_TOKEN) {
+    const { getDb, schema } = await import("@/lib/db");
+    const db = getDb();
+    const rows = await db.select({ id: schema.organization.id }).from(schema.organization).limit(1);
+    return rows[0]?.id ?? null;
   }
-  const { getDb, schema } = await import("@/lib/db");
-  const db = getDb();
-  const rows = await db.select({ id: schema.organization.id }).from(schema.organization).limit(1);
-  return rows[0]?.id ?? null;
+  console.warn(
+    `[evolution-webhook] instanceToken no coincide con ninguna instancia configurada`
+  );
+  return null;
 }

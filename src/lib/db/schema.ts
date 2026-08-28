@@ -472,6 +472,31 @@ export const metaCredentials = pgTable(
   ]
 );
 
+export const evolutionCredentials = pgTable(
+  "evolution_credentials",
+  {
+    id: text("id").primaryKey(),
+    organizationId: text("organization_id")
+      .notNull()
+      .references(() => organization.id, { onDelete: "cascade" }),
+    instanceName: text("instance_name").notNull(),
+    instanceTokenHash: text("instance_token_hash").notNull(),
+    instanceTokenCipher: text("instance_token_cipher").notNull(),
+    instanceTokenIv: text("instance_token_iv").notNull(),
+    instanceTokenTag: text("instance_token_tag").notNull(),
+    instanceId: text("instance_id"),
+    jid: text("jid"),
+    status: text("status", { enum: ["connected", "reconnect_required"] })
+      .notNull()
+      .default("connected"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+    updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  },
+  (t) => [
+    uniqueIndex("evolution_credentials_org_uq").on(t.organizationId),
+  ]
+);
+
 export const agentProfile = pgTable(
   "agent_profile",
   {
