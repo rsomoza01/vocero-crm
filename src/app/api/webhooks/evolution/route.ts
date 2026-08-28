@@ -471,8 +471,11 @@ async function delegateImageToNea(input: {
         if (mediaRes.ok) {
           const buf = Buffer.from(await mediaRes.arrayBuffer());
           imageBase64 = buf.toString("base64");
+          // Diagnóstico: magic number de la imagen descargada.
+          const magic = buf.subarray(0, 16).toString("hex");
+          const head = buf.subarray(0, 40).toString("utf8").replace(/[^\x20-\x7E]/g, ".");
           console.log(
-            `[evolution-webhook] imagen descargada (${buf.length} bytes) para OCR`
+            `[evolution-webhook] imagen descargada (${buf.length} bytes) magic=${magic} head="${head}"`
           );
         } else {
           console.warn(`[evolution-webhook] no se pudo descargar imagen: HTTP ${mediaRes.status}`);
