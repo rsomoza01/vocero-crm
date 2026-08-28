@@ -151,7 +151,9 @@ function extractImage(
   const m = message as Record<string, unknown>;
   const image = m.imageMessage as Record<string, unknown> | undefined;
   if (!image) return null;
-  const url = image.url;
+  // Evolution GO envía la imagen en `imageMessage.URL` (mayúscula) o
+  // `imageMessage.url` (minúscula). Leer ambos.
+  const url = (image.URL ?? image.url) as string | undefined;
   if (typeof url !== "string" || !url) return null;
   // Evolution puede mandar la imagen como base64 (data:...) o como URL.
   let base64 = url;
@@ -454,6 +456,32 @@ async function delegateImageToNea(input: {
     timestamp: input.timestamp,
     skipAgent: true,
   });
+  // La imagen puede venir como base64 (data:...) o como URL http de Evolution.
+  // Si es URL, descargarla con el header apikey y convertirla a base64.
+  let imageBase64 = input.imageBase64;
+  if (!imageBase64.startsWith("data:") && !/^[A-Za-z0-9+/=]+$/.test(imageBase64.slice(0, 100))) {
+    try {
+      const evoBase = env.EVOLUTION_BASE_URL?.replace(/\/$/, "");
+      const token = await getInstanceToken(input.organizationId);
+      if (evoBase && token) {
+        const mediaRes = await fetch(imageBase64, {
+          headers: { apikey: token },
+          signal: AbortSignal.timeout(30000),
+        });
+        if (mediaRes.ok) {
+          const buf = Buffer.from(await mediaRes.arrayBuffer());
+          imageBase64 = buf.toString("base64");
+          console.log(
+            `[evolution-webhook] imagen descargada (${buf.length} bytes) para OCR`
+          );
+        } else {
+          console.warn(`[evolution-webhook] no se pudo descargar imagen: HTTP ${mediaRes.status}`);
+        }
+      }
+    } catch (err) {
+      console.warn(`[evolution-webhook] error descargando imagen: ${err}`);
+    }
+  }
   // Llamar a nea-agent /chat con la imagen base64 (modo producción: send=true,
   // nea-agent resuelve la conversación por identidad y envía la respuesta vía
   // /api/bot/messages → el CRM la manda por Evolution).
@@ -464,7 +492,7 @@ async function delegateImageToNea(input: {
       body: JSON.stringify({
         text: input.text,
         waIdentity: input.identity.identity,
-        imageBase64: input.imageBase64,
+        imageBase64,
         imageMime: input.imageMime,
         send: true,
       }),
@@ -475,5 +503,18 @@ async function delegateImageToNea(input: {
     }
   } catch (err) {
     console.warn(`[evolution-webhook] nea-agent /chat falló: ${err}`);
+  }
+}
+
+/** Obtiene el token de instancia de Evolution de una organización (para descargar media). */
+async function getInstanceToken(organizationId: string): Promise<string | null> {
+  try {
+    const { getEvolutionCredentialsByOrg } = await import(
+      "@/server/whatsapp/evolution-credentials"
+    );
+    const creds = await getEvolutionCredentialsByOrg(organizationId);
+    return creds?.instanceToken ?? null;
+  } catch {
+    return null;
   }
 }
