@@ -82,6 +82,49 @@ function resolveRealSender(data: Record<string, unknown> | undefined): string | 
   return null;
 }
 
+/**
+ * Extrae el número real (JID de usuario) del payload, si viene.
+ */
+function extractRealNumber(data: Record<string, unknown> | undefined): string | null {
+  const candidates = [
+    path(data, "Info", "SenderAlt"),
+    path(data, "Info", "Sender"),
+    path(data, "Info", "Chat"),
+    path(data, "Sender"),
+    path(data, "sender"),
+    path(data, "key", "remoteJid"),
+  ];
+  for (const c of candidates) {
+    if (typeof c === "string" && c && jidType(c) === "user") {
+      return (c.split("@")[0] ?? c).trim() || null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Extrae el LID (identificador anónimo de privacidad de WhatsApp Business)
+ * del payload, si viene. El LID y el número real son la MISMA persona: el
+ * LID se guarda como waUserId para que getOrCreateContactByIdentity los
+ * reconcilie en un solo contacto.
+ */
+function extractLid(data: Record<string, unknown> | undefined): string | null {
+  const candidates = [
+    path(data, "Info", "SenderAlt"),
+    path(data, "Info", "Sender"),
+    path(data, "Info", "Chat"),
+    path(data, "Sender"),
+    path(data, "sender"),
+    path(data, "key", "remoteJid"),
+  ];
+  for (const c of candidates) {
+    if (typeof c === "string" && c && jidType(c) === "lid") {
+      return (c.split("@")[0] ?? c).trim() || null;
+    }
+  }
+  return null;
+}
+
 /** Extrae el texto de un mensaje de WhatsApp (varios formatos). */
 function extractText(message: unknown): string | null {
   if (!message || typeof message !== "object") return null;
@@ -198,15 +241,35 @@ export async function POST(req: Request) {
           .limit(1);
         const botPaused = orgRows[0]?.botPaused ?? false;
 
-        // Construir identidad resiliente a partir del número de WhatsApp.
-        const phone = normalizeMx(sender);
+        // Construir identidad resiliente. El LID y el número real son la MISMA
+        // persona: si viene el número real, se usa como identity/phone y el LID
+        // como waUserId (getOrCreateContactByIdentity los reconcilia). Si solo
+        // viene el LID, se usa bsuid:<LID> como identity (estable).
+        const realNumber = extractRealNumber(data);
+        const lid = extractLid(data);
         const profileName = path(data, "Info", "PushName");
-        const identity: ResolvedIdentity = {
-          identity: phone,
-          phone,
-          waUserId: null,
-          profileName: typeof profileName === "string" && profileName.trim() ? profileName.trim() : null,
-        };
+        const profileNameStr =
+          typeof profileName === "string" && profileName.trim() ? profileName.trim() : null;
+        let identity: ResolvedIdentity;
+        if (realNumber) {
+          const phone = normalizeMx(realNumber);
+          identity = {
+            identity: phone,
+            phone,
+            waUserId: lid,
+            profileName: profileNameStr,
+          };
+        } else if (lid) {
+          identity = {
+            identity: `bsuid:${lid}`,
+            phone: null,
+            waUserId: lid,
+            profileName: profileNameStr,
+          };
+        } else {
+          console.warn(`[evolution-webhook] sin identidad utilizable (sender=${sender})`);
+          return;
+        }
 
         console.log(
           `[evolution-webhook] ingest ${sender} msg=${messageId} text=${text ? JSON.stringify(text.slice(0, 60)) : "null"} paused=${botPaused}`
