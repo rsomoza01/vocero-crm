@@ -139,6 +139,34 @@ function extractText(message: unknown): string | null {
   return null;
 }
 
+/**
+ * Extrae la imagen de un mensaje de Evolution GO, si viene.
+ * Evolution envía la imagen en `message.imageMessage` con `url` (base64 o
+ * URL) y `mimetype`. Devuelve { base64, mime, caption } o null.
+ */
+function extractImage(
+  message: unknown
+): { base64: string; mime: string; caption: string | null } | null {
+  if (!message || typeof message !== "object") return null;
+  const m = message as Record<string, unknown>;
+  const image = m.imageMessage as Record<string, unknown> | undefined;
+  if (!image) return null;
+  const url = image.url;
+  if (typeof url !== "string" || !url) return null;
+  // Evolution puede mandar la imagen como base64 (data:...) o como URL.
+  let base64 = url;
+  if (url.startsWith("data:")) {
+    const comma = url.indexOf(",");
+    if (comma >= 0) base64 = url.slice(comma + 1);
+  }
+  const mime =
+    typeof image.mimetype === "string" && image.mimetype
+      ? image.mimetype
+      : "image/jpeg";
+  const caption = typeof image.caption === "string" ? image.caption : null;
+  return { base64, mime, caption };
+}
+
 /** Extrae el ID del mensaje. */
 function extractMessageId(data: Record<string, unknown> | undefined): string | null {
   const id =
@@ -275,6 +303,24 @@ export async function POST(req: Request) {
           `[evolution-webhook] ingest ${sender} msg=${messageId} text=${text ? JSON.stringify(text.slice(0, 60)) : "null"} paused=${botPaused}`
         );
 
+        // Detectar imagen (receta/medicamento). Si viene, se delega a
+        // nea-agent (que hace el OCR con visión y consulta el catálogo) en
+        // vez de ingestar como texto plano (que no tiene la imagen).
+        const rawMessage = path(data, "Message") ?? path(data, "message");
+        const image = extractImage(rawMessage);
+        if (image && !botPaused) {
+          await delegateImageToNea({
+            organizationId: orgId,
+            identity,
+            waMessageId: String(messageId),
+            text: text ?? image.caption ?? "",
+            imageBase64: image.base64,
+            imageMime: image.mime,
+            timestamp: extractTimestamp(data),
+          });
+          return;
+        }
+
         await ingestInboundMessage({
           organizationId: orgId,
           identity,
@@ -346,4 +392,70 @@ async function resolveOrgFromInstanceToken(
     `[evolution-webhook] instanceToken no coincide con ninguna instancia configurada`
   );
   return null;
+}
+
+/**
+ * Delega una imagen (receta/medicamento) a nea-agent para que haga el OCR
+ * con visión y consulte el catálogo. nea-agent responde vía /api/bot/messages
+ * (el CRM envía por Evolution). El CRM solo ingesta el mensaje a la bandeja
+ * para que quede en el hilo; la respuesta la genera nea-agent.
+ */
+async function delegateImageToNea(input: {
+  organizationId: string;
+  identity: ResolvedIdentity;
+  waMessageId: string;
+  text: string;
+  imageBase64: string;
+  imageMime: string;
+  timestamp: string;
+}): Promise<void> {
+  const env = getEnv();
+  const baseUrl = env.NEA_AGENT_URL;
+  const apiKey = env.BOT_API_KEY;
+  if (!baseUrl || !apiKey) {
+    console.warn("[evolution-webhook] nea-agent sin NEA_AGENT_URL/BOT_API_KEY — imagen a bandeja");
+    await ingestInboundMessage({
+      organizationId: input.organizationId,
+      identity: input.identity,
+      waMessageId: input.waMessageId,
+      type: "text",
+      text: input.text,
+      timestamp: input.timestamp,
+      skipAgent: true,
+    });
+    return;
+  }
+  // Ingestar a la bandeja (para que el mensaje quede en el hilo) sin reenviar
+  // al agente interno (nea-agent lo procesa).
+  await ingestInboundMessage({
+    organizationId: input.organizationId,
+    identity: input.identity,
+    waMessageId: input.waMessageId,
+    type: "text",
+    text: input.text,
+    timestamp: input.timestamp,
+    skipAgent: true,
+  });
+  // Llamar a nea-agent /chat con la imagen base64 (modo producción: send=true,
+  // nea-agent resuelve la conversación por identidad y envía la respuesta vía
+  // /api/bot/messages → el CRM la manda por Evolution).
+  try {
+    const res = await fetch(`${baseUrl}/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "X-API-Key": apiKey },
+      body: JSON.stringify({
+        text: input.text,
+        waIdentity: input.identity.identity,
+        imageBase64: input.imageBase64,
+        imageMime: input.imageMime,
+        send: true,
+      }),
+      signal: AbortSignal.timeout(60000),
+    });
+    if (!res.ok) {
+      console.warn(`[evolution-webhook] nea-agent /chat devolvió ${res.status}`);
+    }
+  } catch (err) {
+    console.warn(`[evolution-webhook] nea-agent /chat falló: ${err}`);
+  }
 }
