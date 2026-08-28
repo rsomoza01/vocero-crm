@@ -308,6 +308,17 @@ export async function POST(req: Request) {
         // vez de ingestar como texto plano (que no tiene la imagen).
         const rawMessage = path(data, "Message") ?? path(data, "message");
         const image = extractImage(rawMessage);
+        if (!image && rawMessage) {
+          // Debug: qué tiene el mensaje para entender por qué no se detectó
+          const msgKeys = typeof rawMessage === "object" && rawMessage !== null
+            ? Object.keys(rawMessage as Record<string, unknown>)
+            : [];
+          const firstKey = msgKeys[0];
+          const firstChild = firstKey ? (rawMessage as Record<string, unknown>)[firstKey] : null;
+          console.warn(
+            `[evolution-webhook] NO detectó imagen, keys=${msgKeys.join(",")}, firstChildKeys=${firstChild && typeof firstChild === "object" ? Object.keys(firstChild as Record<string, unknown>).join(",") : "N/A"}`
+          );
+        }
         if (image && !botPaused) {
           await delegateImageToNea({
             organizationId: orgId,
