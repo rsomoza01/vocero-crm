@@ -363,6 +363,8 @@ export async function ingestInboundMessage(input: {
   text: string | null;
   timestamp: string;
   media?: MediaInput | null;
+  /** Si true, no se reenvía al agente (pausa global). */
+  skipAgent?: boolean;
 }): Promise<void> {
   const db = getDb();
   const { organizationId } = input;
@@ -425,7 +427,9 @@ export async function ingestInboundMessage(input: {
     data: { conversation: { id: conversation.id } },
   });
 
-  await maybeRunAgentTurn(conversation.id);
+  if (!input.skipAgent) {
+    await maybeRunAgentTurn(conversation.id);
+  }
 }
 
 function toDate(timestamp: string): Date {

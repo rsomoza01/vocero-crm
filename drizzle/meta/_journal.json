@@ -57,6 +57,20 @@
       "when": 1786856261073,
       "tag": "0007_confused_zaran",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1787786000000,
+      "tag": "0008_bot_paused",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1787787000000,
+      "tag": "0009_sso_tokens",
+      "breakpoints": true
     }
   ]
 }

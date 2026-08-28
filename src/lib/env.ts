@@ -38,6 +38,11 @@ const envSchema = z.object({
   // API key de un cerebro externo que conduzca la conversación por /api/bot/*.
   // Sin ella, toda esa superficie responde 401.
   BOT_API_KEY: z.string().optional(),
+  // SSO desde el SAAS (app.gentefarma.com): secreto compartido para firmar
+  // los links de login directo. Sin él, /api/auth/sso responde 404.
+  SSO_SHARED_SECRET: z.string().optional(),
+  // Origen permitido para CORS del SSO (el SAAS). Default: app.gentefarma.com.
+  SSO_ALLOWED_ORIGIN: z.string().default("https://app.gentefarma.com"),
   // 008: volumen local de adjuntos (constitución II: sin S3/R2).
   MEDIA_DIR: z.string().default("./.dev-media"),
   NODE_ENV: z.string().default("development"),

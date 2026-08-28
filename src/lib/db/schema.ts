@@ -66,6 +66,15 @@ export const verification = pgTable("verification", {
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
 
+/** Token de un solo uso para SSO SAAS→CRM (login directo sin contraseña). */
+export const ssoToken = pgTable("sso_token", {
+  tokenHash: text("token_hash").primaryKey(),
+  email: text("email").notNull(),
+  redirectTo: text("redirect_to").notNull().default("/inbox"),
+  usedAt: timestamp("used_at"),
+  expiresAt: timestamp("expires_at").notNull(),
+});
+
 export const organization = pgTable("organization", {
   id: text("id").primaryKey(),
   name: text("name").notNull(),
@@ -73,6 +82,8 @@ export const organization = pgTable("organization", {
   logo: text("logo"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
   metadata: text("metadata"),
+  /** Pausa GLOBAL del agente IA (comando AGENTE OFF/ON + toggle en Ajustes). */
+  botPaused: boolean("bot_paused").notNull().default(false),
 });
 
 export const member = pgTable("member", {
