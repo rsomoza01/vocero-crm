@@ -2,10 +2,10 @@ import { and, asc, eq } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { publish } from "@/server/events/bus";
-import { runAgentTurn } from "@/server/ai/pipeline";
-import { renderKb } from "@/server/ai/prompts";
 import { computeScore, judgeCase } from "@/server/lab/judge";
 import { PERSONAS, type Persona } from "@/server/lab/personas";
+import { getEnv } from "@/lib/env";
+import { renderKb } from "@/server/ai/prompts";
 
 /**
  * Runner del Laboratorio (FR-030/FR-034): corrida en segundo plano DENTRO del
@@ -204,8 +204,33 @@ async function runConversation(
       .set({ lastInboundAt: now, lastMessageAt: now, updatedAt: now })
       .where(eq(schema.conversation.id, convId));
 
-    // Turno REAL del agente, secuencial y sin debounce (FR-030).
-    await runAgentTurn(convId);
+    // Turno REAL del agente EXTERNO (nea-agent): le mandamos la línea del
+    // cliente a /api/chat, que corre el turno completo (catálogo, backstops,
+    // carrito) y devuelve las respuestas capturadas SIN enviarlas por
+    // WhatsApp (is_test). Las persistimos como salientes del sandbox.
+    const replies = await callNeaChat({
+      conversationId: convId,
+      text: line,
+      waIdentity: persona.phone,
+    });
+    for (const reply of replies) {
+      await db.insert(schema.message).values({
+        id: newId("message"),
+        organizationId,
+        conversationId: convId,
+        direction: "out",
+        type: "text",
+        text: reply,
+        status: "sent",
+        aiGenerated: true,
+        origin: "ai",
+        waTimestamp: now,
+      });
+    }
+    await db
+      .update(schema.conversation)
+      .set({ lastMessageAt: now, updatedAt: now })
+      .where(eq(schema.conversation.id, convId));
 
     const convRows = await db
       .select({ handoffAt: schema.conversation.handoffAt })
@@ -296,4 +321,46 @@ function isUniqueViolation(err: unknown): boolean {
   if (typeof err !== "object" || err === null) return false;
   const e = err as { code?: string; cause?: { code?: string } };
   return e.code === "23505" || e.cause?.code === "23505";
+}
+
+/**
+ * Llama al endpoint /api/chat de nea-agent para procesar UN turno del
+ * Laboratorio. El agente externo corre el turno completo (catálogo,
+ * backstops, carrito) y devuelve las respuestas capturadas SIN enviarlas
+ * por WhatsApp (modo laboratorio). Devuelve la lista de respuestas (vacía
+ * si el agente guardó silencio / handoff).
+ */
+async function callNeaChat(input: {
+  conversationId: string;
+  text: string;
+  waIdentity: string;
+}): Promise<string[]> {
+  const env = getEnv();
+  const baseUrl = env.NEA_AGENT_URL;
+  const apiKey = env.BOT_API_KEY;
+  if (!apiKey) {
+    console.warn("[lab] nea-agent sin BOT_API_KEY — turno vacío");
+    return [];
+  }
+  const res = await fetch(`${baseUrl}/chat`, {
+    method: "POST",
+    headers: { "content-type": "application/json", "X-API-Key": apiKey },
+    body: JSON.stringify({
+      conversationId: input.conversationId,
+      text: input.text,
+      waIdentity: input.waIdentity,
+    }),
+  }).catch((err) => {
+    console.warn(`[lab] nea-agent /api/chat falló: ${err}`);
+    return null;
+  });
+  if (!res) return [];
+  if (!res.ok) {
+    console.warn(`[lab] nea-agent /api/chat devolvió ${res.status}`);
+    return [];
+  }
+  const data = (await res.json().catch(() => null)) as {
+    replies?: string[];
+  } | null;
+  return data?.replies ?? [];
 }
