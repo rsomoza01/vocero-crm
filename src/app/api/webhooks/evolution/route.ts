@@ -313,10 +313,17 @@ export async function POST(req: Request) {
           const msgKeys = typeof rawMessage === "object" && rawMessage !== null
             ? Object.keys(rawMessage as Record<string, unknown>)
             : [];
-          const firstKey = msgKeys[0];
-          const firstChild = firstKey ? (rawMessage as Record<string, unknown>)[firstKey] : null;
+          // Ver el contenido de imageMessage si existe
+          const imgMsg = (rawMessage as Record<string, unknown>)?.imageMessage;
+          let imgMsgDebug = "N/A";
+          if (imgMsg && typeof imgMsg === "object") {
+            const imgKeys = Object.keys(imgMsg as Record<string, unknown>);
+            const imgUrl = (imgMsg as Record<string, unknown>)?.url;
+            const imgMime = (imgMsg as Record<string, unknown>)?.mimetype;
+            imgMsgDebug = `imageMessage(url=${typeof imgUrl}, mime=${imgMime}, keys=${imgKeys.join(",")})`;
+          }
           console.warn(
-            `[evolution-webhook] NO detectó imagen, keys=${msgKeys.join(",")}, firstChildKeys=${firstChild && typeof firstChild === "object" ? Object.keys(firstChild as Record<string, unknown>).join(",") : "N/A"}`
+            `[evolution-webhook] NO detectó imagen, keys=${msgKeys.join(",")}, ${imgMsgDebug}`
           );
         }
         if (image && !botPaused) {
