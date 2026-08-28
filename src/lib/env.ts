@@ -38,6 +38,9 @@ const envSchema = z.object({
   // API key de un cerebro externo que conduzca la conversación por /api/bot/*.
   // Sin ella, toda esa superficie responde 401.
   BOT_API_KEY: z.string().optional(),
+  // URL base del agente externo (nea-agent) para los proxies de Analítica y
+  // Pacientes crónicos. El CRM llama a nea-agent con X-API-Key = BOT_API_KEY.
+  NEA_AGENT_URL: z.string().default("https://nea-agent-production.up.railway.app"),
   // SSO desde el SAAS (app.gentefarma.com): secreto compartido para firmar
   // los links de login directo. Sin él, /api/auth/sso responde 404.
   SSO_SHARED_SECRET: z.string().optional(),

@@ -4,7 +4,9 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
+  BarChart3,
   FlaskConical,
+  HeartPulse,
   Inbox,
   Kanban,
   LogOut,
@@ -26,6 +28,8 @@ const NAV = [
   { href: "/pipeline", label: "Pipeline", icon: Kanban },
   { href: "/contacts", label: "Contactos", icon: Users },
   { href: "/agent", label: "Agente", icon: Sparkles },
+  { href: "/analytics", label: "Analítica", icon: BarChart3 },
+  { href: "/pacientes", label: "Pacientes", icon: HeartPulse },
   { href: "/lab", label: "Laboratorio", icon: FlaskConical },
 ] as const;
 
