@@ -1,5 +1,4 @@
 import { timingSafeEqual } from "node:crypto";
-import { eq } from "drizzle-orm";
 import { getEnv } from "@/lib/env";
 import { getDb, schema } from "@/lib/db";
 import { searchProducts, getProviderInfo } from "@/server/catalog/firebase";

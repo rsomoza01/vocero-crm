@@ -84,6 +84,8 @@ export const organization = pgTable("organization", {
   metadata: text("metadata"),
   /** Pausa GLOBAL del agente IA (comando AGENTE OFF/ON + toggle en Ajustes). */
   botPaused: boolean("bot_paused").notNull().default(false),
+  /** providerId del catálogo Firebase (multi-tenant: cada farmacia = un provider). */
+  providerId: text("provider_id"),
 });
 
 export const member = pgTable("member", {

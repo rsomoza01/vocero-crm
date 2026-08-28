@@ -43,6 +43,12 @@ const envSchema = z.object({
   SSO_SHARED_SECRET: z.string().optional(),
   // Origen permitido para CORS del SSO (el SAAS). Default: app.gentefarma.com.
   SSO_ALLOWED_ORIGIN: z.string().default("https://app.gentefarma.com"),
+  // Catálogo de medicamentos en Firebase Firestore (multi-tenant).
+  FIREBASE_PROJECT_ID: z.string().optional(),
+  FIREBASE_CLIENT_EMAIL: z.string().optional(),
+  FIREBASE_PRIVATE_KEY: z.string().optional(),
+  FIREBASE_COLLECTION_PRODUCTS: z.string().default("products-providers"),
+  FIREBASE_COLLECTION_PROVIDERS: z.string().default("provider"),
   // 008: volumen local de adjuntos (constitución II: sin S3/R2).
   MEDIA_DIR: z.string().default("./.dev-media"),
   NODE_ENV: z.string().default("development"),

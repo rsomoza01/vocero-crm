@@ -110,23 +110,24 @@ const SINONIMOS_PRESENTACION: Record<string, string> = {
 function levenshtein(a: string, b: string, maxDist: number): number {
   if (a === b) return 0;
   if (Math.abs(a.length - b.length) > maxDist) return maxDist + 1;
-  let prev = new Array<number>(b.length + 1);
-  let cur = new Array<number>(b.length + 1);
+  const prev = new Array<number>(b.length + 1).fill(0);
+  const cur = new Array<number>(b.length + 1).fill(0);
   for (let j = 0; j <= b.length; j++) prev[j] = j;
   for (let i = 1; i <= a.length; i++) {
     cur[0] = i;
     let rowMin = cur[0];
     for (let j = 1; j <= b.length; j++) {
       const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
-      if (cur[j] < rowMin) rowMin = cur[j];
+      const up = prev[j]! + 1;
+      const left = cur[j - 1]! + 1;
+      const diag = prev[j - 1]! + cost;
+      cur[j] = Math.min(up, left, diag);
+      if (cur[j]! < rowMin) rowMin = cur[j]!;
     }
     if (rowMin > maxDist) return maxDist + 1;
-    const tmp = prev;
-    prev = cur;
-    cur = tmp;
+    for (let j = 0; j <= b.length; j++) prev[j] = cur[j]!;
   }
-  return prev[b.length];
+  return prev[b.length]!;
 }
 
 /** Tasa BCV (Bs por USD) con cache de 30 min. */
@@ -137,7 +138,6 @@ async function tasaBcv(): Promise<number> {
   const store = firestore();
   if (!store) return 0;
   try {
-    const env = getEnv();
     const snap = await store.collection("divisabcv").limit(1).get();
     for (const doc of snap.docs) {
       const d = doc.data() as Record<string, unknown>;
