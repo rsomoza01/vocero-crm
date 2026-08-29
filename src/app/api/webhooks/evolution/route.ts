@@ -174,6 +174,36 @@ function extractImage(
   return { base64, mime, caption };
 }
 
+/**
+ * Extrae el AUDIO de un mensaje de Evolution GO, si viene (nota de voz).
+ * Igual que extractImage: el campo raíz `base64` (decodificado) o la URL de
+ * `audioMessage.URL`. Devuelve { base64, mime } o null.
+ */
+function extractAudio(
+  message: unknown
+): { base64: string; mime: string } | null {
+  if (!message || typeof message !== "object") return null;
+  const m = message as Record<string, unknown>;
+  const audio = m.audioMessage as Record<string, unknown> | undefined;
+  if (!audio) return null;
+  const rootBase64 = typeof m.base64 === "string" && m.base64 ? m.base64 : null;
+  const url = (audio.URL ?? audio.url) as string | undefined;
+  let base64: string | null = null;
+  if (rootBase64) {
+    base64 = rootBase64.startsWith("data:")
+      ? rootBase64.slice(rootBase64.indexOf(",") + 1)
+      : rootBase64;
+  } else if (typeof url === "string" && url) {
+    base64 = url.startsWith("data:") ? url.slice(url.indexOf(",") + 1) : url;
+  }
+  if (!base64) return null;
+  const mime =
+    typeof audio.mimetype === "string" && audio.mimetype
+      ? audio.mimetype
+      : "audio/ogg";
+  return { base64, mime };
+}
+
 /** Extrae el ID del mensaje. */
 function extractMessageId(data: Record<string, unknown> | undefined): string | null {
   const id =
@@ -367,6 +397,26 @@ export async function POST(req: Request) {
           return;
         }
 
+        // Audio (nota de voz): delegar a nea-agent para que lo transcriba
+        // (Groq) y lo procese como consulta. Evolution lo manda en el campo
+        // raíz base64 / audioMessage.
+        const audio = extractAudio(rawMessage);
+        if (audio && !botPaused) {
+          console.log(
+            `[evolution-webhook] audio detectado: base64Len=${audio.base64.length} mime=${audio.mime}`
+          );
+          await delegateToNea({
+            organizationId: orgId,
+            identity,
+            waMessageId: String(messageId),
+            text: text ?? "",
+            audioBase64: audio.base64,
+            audioMime: audio.mime,
+            timestamp: extractTimestamp(data),
+          });
+          return;
+        }
+
         // Farmacia: delegar TAMBIÉN los textos a nea-agent (es el único
         // cerebro con el contexto de la receta). El pipeline interno del CRM
         // no sabe resolver "quiero 1 caja de 1,2,3..." contra last_options.
@@ -469,6 +519,8 @@ async function delegateToNea(input: {
   text: string;
   imageBase64?: string;
   imageMime?: string;
+  audioBase64?: string;
+  audioMime?: string;
   timestamp: string;
 }): Promise<void> {
   const env = getEnv();
@@ -527,6 +579,31 @@ async function delegateToNea(input: {
       console.warn(`[evolution-webhook] error descargando imagen: ${err}`);
     }
   }
+  // Igual para el audio: si viene como URL http de Evolution, descargarlo y
+  // convertirlo a base64 (los mensajes nuevos de evolución los recibe ya en
+  // el campo raíz base64, pero defendemos el caso URL).
+  let audioBase64 = input.audioBase64 ?? "";
+  if (audioBase64 && !audioBase64.startsWith("data:") && !/^[A-Za-z0-9+/=]+$/.test(audioBase64.slice(0, 100))) {
+    try {
+      const evoBase = env.EVOLUTION_BASE_URL?.replace(/\/$/, "");
+      const token = await getInstanceToken(input.organizationId);
+      if (evoBase && token) {
+        const mediaRes = await fetch(audioBase64, {
+          headers: { apikey: token },
+          signal: AbortSignal.timeout(30000),
+        });
+        if (mediaRes.ok) {
+          const buf = Buffer.from(await mediaRes.arrayBuffer());
+          audioBase64 = buf.toString("base64");
+          console.log(`[evolution-webhook] audio descargado (${buf.length} bytes)`);
+        } else {
+          console.warn(`[evolution-webhook] no se pudo descargar audio: HTTP ${mediaRes.status}`);
+        }
+      }
+    } catch (err) {
+      console.warn(`[evolution-webhook] error descargando audio: ${err}`);
+    }
+  }
   // Llamar a nea-agent /chat con la imagen base64 (modo producción: send=true,
   // nea-agent resuelve la conversación por identidad y envía la respuesta vía
   // /api/bot/messages → el CRM la manda por Evolution).
@@ -540,6 +617,8 @@ async function delegateToNea(input: {
         waMessageId: input.waMessageId,
         imageBase64,
         imageMime: input.imageMime,
+        audioBase64,
+        audioMime: input.audioMime,
         send: true,
       }),
       signal: AbortSignal.timeout(60000),
