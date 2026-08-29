@@ -192,8 +192,13 @@ export async function searchProducts(
   const termTokens = term
     .split(/\s+/)
     .filter((t) => t.length >= 3 && !GENERIC_PRESENTACION.has(t));
-  const distintivos = termTokens.filter((t) => !NO_DISTINTIVO.has(t));
-  const noDistintivos = termTokens.filter((t) => NO_DISTINTIVO.has(t));
+  // Los números (dosis "300", "500") NO califican en la fase difusa: por
+  // Levenshtein "300" matchea con "500"/"100"/"400" e inunda de productos
+  // irrelevantes. Solo matchean en la fase exacta (substring), p. ej.
+  // "esoz 40" → "esoz 40mg". Se excluyen de distintivos y noDistintivos.
+  const esNumero = (t: string) => /^\d+$/.test(t);
+  const distintivos = termTokens.filter((t) => !NO_DISTINTIVO.has(t) && !esNumero(t));
+  const noDistintivos = termTokens.filter((t) => NO_DISTINTIVO.has(t) && !esNumero(t));
 
   for (const doc of snap.docs) {
     const p = mapProduct(doc.id, doc.data() as Record<string, unknown>);
@@ -212,7 +217,9 @@ export async function searchProducts(
     let score = 0;
     let matchedDistintivo = false;
     for (const qt of distintivos) {
-      const maxD = qt.length <= 6 ? 1 : 2;
+      // maxD=1: distancia de 1 letra (typo). maxD=2 para tokens largos
+      // producía falsos positivos ("moderan"≈"madera", "bumetin"≈"brucetin").
+      const maxD = 1;
       for (const ht of hayTokens) {
         if (ht.length < 3) continue;
         if (levenshtein(qt, ht, maxD) <= maxD) {
