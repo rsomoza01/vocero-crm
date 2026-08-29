@@ -270,11 +270,20 @@ export async function POST(req: Request) {
         // Pausa global: no reenviar al agente, solo ingestar a la bandeja.
         const db = getDb();
         const orgRows = await db
-          .select({ botPaused: schema.organization.botPaused })
+          .select({
+            botPaused: schema.organization.botPaused,
+            providerId: schema.organization.providerId,
+          })
           .from(schema.organization)
           .where(eq(schema.organization.id, orgId))
           .limit(1);
         const botPaused = orgRows[0]?.botPaused ?? false;
+        // Farmacia = org con catálogo (providerId). En farmacia, nea-agent es
+        // el ÚNICO cerebro: TODOS los mensajes (texto e imagen) se delegan a
+        // él, porque el pipeline interno del CRM no tiene el contexto de la
+        // receta (last_options) que nea-agent generó. Sin esto, un texto de
+        // seguimiento ("quiero 1 caja de 1,2,3...") iría al cerebro equivocado.
+        const esFarmacia = Boolean(orgRows[0]?.providerId);
 
         // Construir identidad resiliente. El LID y el número real son la MISMA
         // persona: si viene el número real, se usa como identity/phone y el LID
@@ -346,13 +355,29 @@ export async function POST(req: Request) {
           );
         }
         if (image && !botPaused) {
-          await delegateImageToNea({
+          await delegateToNea({
             organizationId: orgId,
             identity,
             waMessageId: String(messageId),
             text: text ?? image.caption ?? "",
             imageBase64: image.base64,
             imageMime: image.mime,
+            timestamp: extractTimestamp(data),
+          });
+          return;
+        }
+
+        // Farmacia: delegar TAMBIÉN los textos a nea-agent (es el único
+        // cerebro con el contexto de la receta). El pipeline interno del CRM
+        // no sabe resolver "quiero 1 caja de 1,2,3..." contra last_options.
+        if (esFarmacia && !botPaused) {
+          await delegateToNea({
+            organizationId: orgId,
+            identity,
+            waMessageId: String(messageId),
+            text: text ?? "",
+            imageBase64: "",
+            imageMime: "",
             timestamp: extractTimestamp(data),
           });
           return;
@@ -437,20 +462,20 @@ async function resolveOrgFromInstanceToken(
  * (el CRM envía por Evolution). El CRM solo ingesta el mensaje a la bandeja
  * para que quede en el hilo; la respuesta la genera nea-agent.
  */
-async function delegateImageToNea(input: {
+async function delegateToNea(input: {
   organizationId: string;
   identity: ResolvedIdentity;
   waMessageId: string;
   text: string;
-  imageBase64: string;
-  imageMime: string;
+  imageBase64?: string;
+  imageMime?: string;
   timestamp: string;
 }): Promise<void> {
   const env = getEnv();
   const baseUrl = env.NEA_AGENT_URL;
   const apiKey = env.BOT_API_KEY;
   if (!baseUrl || !apiKey) {
-    console.warn("[evolution-webhook] nea-agent sin NEA_AGENT_URL/BOT_API_KEY — imagen a bandeja");
+    console.warn("[evolution-webhook] nea-agent sin NEA_AGENT_URL/BOT_API_KEY — mensaje a bandeja");
     await ingestInboundMessage({
       organizationId: input.organizationId,
       identity: input.identity,
@@ -475,8 +500,8 @@ async function delegateImageToNea(input: {
   });
   // La imagen puede venir como base64 (data:...) o como URL http de Evolution.
   // Si es URL, descargarla con el header apikey y convertirla a base64.
-  let imageBase64 = input.imageBase64;
-  if (!imageBase64.startsWith("data:") && !/^[A-Za-z0-9+/=]+$/.test(imageBase64.slice(0, 100))) {
+  let imageBase64 = input.imageBase64 ?? "";
+  if (imageBase64 && !imageBase64.startsWith("data:") && !/^[A-Za-z0-9+/=]+$/.test(imageBase64.slice(0, 100))) {
     try {
       const evoBase = env.EVOLUTION_BASE_URL?.replace(/\/$/, "");
       const token = await getInstanceToken(input.organizationId);
