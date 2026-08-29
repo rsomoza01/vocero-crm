@@ -331,6 +331,7 @@ export const conversation = pgTable(
         "ventana",
         "hostilidad",
         "manual_reply",
+        "medicamento_no_disponible",
       ],
     }),
     lastInboundAt: timestamp("last_inbound_at"),
