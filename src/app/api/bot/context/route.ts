@@ -103,7 +103,17 @@ export async function GET(req: Request) {
     )
     .limit(1);
 
+  // providerId del catálogo Firebase (multi-tenant: cada farmacia = un
+  // provider). El cerebro externo (nea-agent) lo necesita para activar el
+  // modo farmacia y exponer las tools de catálogo.
+  const orgRows = await db
+    .select({ providerId: schema.organization.providerId })
+    .from(schema.organization)
+    .where(eq(schema.organization.id, organizationId))
+    .limit(1);
+
   return Response.json({
+    providerId: orgRows[0]?.providerId ?? null,
     contact: {
       id: contact.id,
       name: contact.name,
