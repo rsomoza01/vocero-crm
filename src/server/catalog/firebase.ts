@@ -196,7 +196,10 @@ export async function searchProducts(
   // Levenshtein "300" matchea con "500"/"100"/"400" e inunda de productos
   // irrelevantes. Solo matchean en la fase exacta (substring), p. ej.
   // "esoz 40" → "esoz 40mg". Se excluyen de distintivos y noDistintivos.
-  const esNumero = (t: string) => /^\d+$/.test(t);
+  // IMPORTANTE: cubre también "40mg"/"5mg"/"10mg" (número+unidad pegados),
+  // no solo dígitos puros — "40mg" por Levenshtein matchea "10mg"/"50mg"/"400mg"
+  // y desbordaba la respuesta con 20 irrelevantes (pandoprazol 40mg → AMLODIPINA).
+  const esNumero = (t: string) => /\d/.test(t);
   const distintivos = termTokens.filter((t) => !NO_DISTINTIVO.has(t) && !esNumero(t));
   const noDistintivos = termTokens.filter((t) => NO_DISTINTIVO.has(t) && !esNumero(t));
 
