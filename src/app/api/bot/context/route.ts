@@ -127,6 +127,7 @@ export async function GET(req: Request) {
       // aunque el flag siga en true.
       aiEnabled: conversation.aiEnabled && !conversation.handoffAt,
       handoffAt: conversation.handoffAt?.toISOString() ?? null,
+      handoffReason: conversation.handoffReason ?? null,
       windowOpen: isWindowOpen(conversation.lastInboundAt),
       windowRemainingMs: windowRemainingMs(conversation.lastInboundAt),
     },

@@ -14,6 +14,7 @@ export const HANDOFF_REASONS = [
   "error",
   "ventana",
   "hostilidad",
+  "medicamento_no_disponible",
 ] as const;
 
 export type HandoffReason = (typeof HANDOFF_REASONS)[number];
