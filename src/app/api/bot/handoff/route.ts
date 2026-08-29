@@ -68,6 +68,23 @@ export async function POST(req: Request) {
       type: "conversation.updated",
       data: { conversation: { id: conv.id } },
     });
+  } else {
+    // Ya estaba en handoff, pero este handoff aclara/actualiza el MOTIVO
+    // (p. ej. el primero se guardó como 'modelo' porque el catálogo nuevo no
+    // existía aún). No se toca handoffAt ni aiEnabled (idempotente), solo el
+    // motivo, para que la reactivación automática por medicamento_no_disponible
+    // pueda reconocer el handoff real.
+    await db
+      .update(schema.conversation)
+      .set({
+        handoffReason: toHandoffReason(body.data.reason),
+        updatedAt: new Date(),
+      })
+      .where(eq(schema.conversation.id, conv.id));
+    publish(organizationId, {
+      type: "conversation.updated",
+      data: { conversation: { id: conv.id } },
+    });
   }
   return Response.json({ ok: true });
 }
