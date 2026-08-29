@@ -3,6 +3,9 @@ import { z } from "zod";
 import { getDb, schema } from "@/lib/db";
 import { apiError, parseBody } from "@/lib/api";
 import { requireBotKey, resolveInstanceOrg } from "@/server/bot/auth";
+import { getEnv } from "@/lib/env";
+import { evolutionRecipient } from "@/server/whatsapp/evolution";
+import { getEvolutionCredentialsByOrg } from "@/server/whatsapp/evolution-credentials";
 import { getCredentialsByOrg } from "@/server/whatsapp/credentials";
 import { graphRequest } from "@/lib/meta/client";
 
@@ -11,12 +14,18 @@ export const dynamic = "force-dynamic";
 const bodySchema = z.object({ conversationId: z.string().min(1) });
 
 /**
- * Indicador "escribiendo…" + marcar leído el último inbound.
+ * Indicador "escribiendo…" (los 3 puntitos de WhatsApp) + marcar leído el
+ * último inbound.
  * POST /api/bot/typing {conversationId}
  *
- * Best-effort por contrato: al bot JAMÁS le vale reintentar esto — si Meta
- * falla se responde 200 {ok:false} y la conversación sigue. El indicador
- * dura hasta ~25 s o hasta que llegue la respuesta real.
+ * Best-effort por contrato: al bot JAMÁS le vale reintentar esto — si el
+ * canal falla se responde 200 {ok:false} y la conversación sigue. El
+ * indicador dura hasta ~25 s o hasta que llegue la respuesta real.
+ *
+ * Multi-canal:
+ * - Evolution GO (canal real): POST /chat/sendPresence con composing=true al
+ *   número del contacto, usando el token multi-tenant de la org.
+ * - Meta Cloud API: status read + typing_indicator (canal Meta).
  */
 export async function POST(req: Request) {
   const denied = requireBotKey(req);
@@ -48,10 +57,61 @@ export async function POST(req: Request) {
   }
   if (!conv.aiEnabled || conv.handoffAt) {
     // Handoff/IA pausada: un humano atiende — "escribiendo…" aquí sería
-    // mentirle al cliente. Se omite sin tocar Meta.
+    // mentirle al cliente. Se omite sin tocar el canal.
     return Response.json({ ok: false, reason: "ai_paused" });
   }
 
+  // Resolver el número del destinatario (teléfono o identidad de WhatsApp).
+  const ctRows = await db
+    .select()
+    .from(schema.contact)
+    .where(eq(schema.contact.id, conv.contactId))
+    .limit(1);
+  const contact = ctRows[0];
+  const recipient = contact?.phone
+    ? contact.phone
+    : contact?.waUserId;
+  if (!recipient) {
+    return Response.json({ ok: false, reason: "no_recipient" });
+  }
+
+  const channel = getEnv().CHANNEL_PROVIDER;
+
+  // ---- Canal Evolution GO: /chat/sendPresence (composing) -----------------
+  if (channel === "evolution") {
+    const creds = await getEvolutionCredentialsByOrg(organizationId);
+    const base = getEnv().EVOLUTION_BASE_URL?.replace(/\/$/, "");
+    if (!creds?.instanceToken || !base) {
+      return apiError(409, "no_connection", "WhatsApp no está conectado");
+    }
+    try {
+      const res = await fetch(`${base}/chat/sendPresence`, {
+        method: "POST",
+        headers: {
+          apikey: creds.instanceToken,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          number: evolutionRecipient(recipient),
+          presence: "composing",
+          delay: 120,
+          formatJid: true,
+        }),
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!res.ok) {
+        console.warn(
+          `[bot/typing] Evolution sendPresence devolvió ${res.status} (${await res.text().catch(() => "")})`
+        );
+        return Response.json({ ok: false, reason: "evolution_error" });
+      }
+      return Response.json({ ok: true });
+    } catch {
+      return Response.json({ ok: false, reason: "evolution_error" });
+    }
+  }
+
+  // ---- Canal Meta Cloud API: read + typing_indicator ----------------------
   const msgs = await db
     .select({ waMessageId: schema.message.waMessageId })
     .from(schema.message)
