@@ -512,6 +512,7 @@ async function delegateImageToNea(input: {
       body: JSON.stringify({
         text: input.text,
         waIdentity: input.identity.identity,
+        waMessageId: input.waMessageId,
         imageBase64,
         imageMime: input.imageMime,
         send: true,
