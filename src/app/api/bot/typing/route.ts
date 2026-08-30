@@ -15,13 +15,8 @@ const bodySchema = z.object({
   conversationId: z.string().min(1),
   // Estado opcional del indicador: "composing" (default) o "paused".
   // Nea lo usa para apagar explícitamente los puntitos justo cuando entrega
-  // la respuesta final, evitando que el composing con delay (que Evolution
-  // re-envía internamente) siga vivo y re-aparezca DESPUÉS de las opciones.
+  // la respuesta final.
   state: z.enum(["composing", "recording", "paused"]).optional().default("composing"),
-  // delay en ms para state="composing". Por defecto mantiene vivo el
-  // indicador; Nea manda 0 (single-fire) en el último composing previo al
-  // envío para no dejar un timer que re-avive los puntitos post-respuesta.
-  delay: z.number().int().min(0).max(30000).optional(),
 });
 
 /**
@@ -110,9 +105,13 @@ export async function POST(req: Request) {
           number: evolutionRecipient(recipient),
           state: body.data.state,
           isAudio: false,
-          // delay solo aplica a "composing". Para "paused" Evolution lo ignora
-          // (el struct lo marca solo cuando State es "composing").
-          delay: body.data.delay ?? (body.data.state === "composing" ? 15000 : 0),
+          // delay>0 solo para "composing" hace que Evolution re-envíe el
+          // indicador cada 5 s durante `delay` en un goroutine PROPIO y mande
+          // "paused" al final. Ese goroutine queda VIVO y re-aviva los 3
+          // puntitos DESPUÉS de que entregamos la respuesta (el bug que viste).
+          // Por eso el composing siempre es single-fire (delay=0) y el
+          // refresco lo hace Nea con su heartbeat; así no queda ningún timer.
+          delay: 0,
         }),
         signal: AbortSignal.timeout(15000),
       });
