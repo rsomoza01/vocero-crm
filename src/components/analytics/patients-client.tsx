@@ -44,7 +44,6 @@ export function PatientsClient() {
   const [condiciones, setCondiciones] = useState<string[]>([]);
 
   // Paginación por scroll infinito
-  const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const loadingRef = useRef(false);
