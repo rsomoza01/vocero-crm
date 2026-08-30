@@ -77,7 +77,7 @@ export async function POST(req: Request) {
 
   const channel = getEnv().CHANNEL_PROVIDER;
 
-  // ---- Canal Evolution GO: /chat/sendPresence (composing) -----------------
+  // ---- Canal Evolution GO: /message/presence (composing) ------------------
   if (channel === "evolution") {
     const creds = await getEvolutionCredentialsByOrg(organizationId);
     const base = getEnv().EVOLUTION_BASE_URL?.replace(/\/$/, "");
@@ -85,7 +85,11 @@ export async function POST(req: Request) {
       return apiError(409, "no_connection", "WhatsApp no está conectado");
     }
     try {
-      const res = await fetch(`${base}/chat/sendPresence`, {
+      // Este fork de Evolution (evolution-foundation/evolution-go) expone la
+      // presencia en POST /message/presence con {number, state, delay} — NO en
+      // /chat/sendPresence (404). El `delay` (ms) mantiene el indicador
+      // "composing" vivo con re-envíos internos y luego manda "paused".
+      const res = await fetch(`${base}/message/presence`, {
         method: "POST",
         headers: {
           apikey: creds.instanceToken,
@@ -93,15 +97,15 @@ export async function POST(req: Request) {
         },
         body: JSON.stringify({
           number: evolutionRecipient(recipient),
-          presence: "composing",
-          delay: 120,
-          formatJid: true,
+          state: "composing",
+          isAudio: false,
+          delay: 15000,
         }),
         signal: AbortSignal.timeout(15000),
       });
       if (!res.ok) {
         console.warn(
-          `[bot/typing] Evolution sendPresence devolvió ${res.status} (${await res.text().catch(() => "")})`
+          `[bot/typing] Evolution /message/presence devolvió ${res.status} (${await res.text().catch(() => "")})`
         );
         return Response.json({ ok: false, reason: "evolution_error" });
       }
