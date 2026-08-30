@@ -45,6 +45,7 @@ export function PatientsClient() {
 
   // Paginación por scroll infinito
   const [hasMore, setHasMore] = useState(true);
+  const scrollRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
   const loadingRef = useRef(false);
   const pageRef = useRef(1);
@@ -58,7 +59,6 @@ export function PatientsClient() {
       const data = (await res.json()) as { pacientes?: Paciente[] };
       const conds = new Set<string>();
       for (const p of data.pacientes ?? []) conds.add(p.condicion);
-      // Las condiciones conocidas del seed + las que aparezcan.
       setCondiciones([...conds]);
     })();
   }, []);
@@ -101,10 +101,13 @@ export function PatientsClient() {
     void loadPage(1, true);
   }, [query, condicion, soloConsentidos, loadPage]);
 
-  // Scroll infinito: IntersectionObserver sobre el centinela.
+  // Scroll infinito: IntersectionObserver sobre el centinela, con root = el
+  // contenedor de scroll interno (el <main> del AppShell tiene overflow-hidden,
+  // así que el scroll ocurre aquí, no en el viewport).
   useEffect(() => {
     const el = sentinelRef.current;
-    if (!el) return;
+    const root = scrollRef.current;
+    if (!el || !root) return;
     const obs = new IntersectionObserver(
       (entries) => {
         const entry = entries[0];
@@ -114,23 +117,17 @@ export function PatientsClient() {
           void loadPage(next, false);
         }
       },
-      { rootMargin: "200px" }
+      { root, rootMargin: "200px" }
     );
     obs.observe(el);
     return () => obs.disconnect();
   }, [hasMore, loadPage]);
 
   return (
-    <div className="space-y-4">
-      {/* Filtros */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Filtros</CardTitle>
-          <CardDescription>
-            Busca por nombre, teléfono o condición crónica.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="flex flex-wrap items-end gap-3">
+    <div className="flex h-full flex-col">
+      {/* Filtros (fijos arriba) */}
+      <div className="shrink-0 border-b px-4 py-3 sm:px-6">
+        <div className="flex flex-wrap items-end gap-3">
           <div className="space-y-1">
             <Label htmlFor="q">Nombre o teléfono</Label>
             <Input
@@ -164,94 +161,95 @@ export function PatientsClient() {
           >
             {soloConsentidos ? "Mostrar todos" : "Solo consentidos"}
           </Button>
-        </CardContent>
-      </Card>
-
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">
-          {total} pacientes detectados.
-        </p>
-        {loading && <p className="text-sm text-muted-foreground">Cargando…</p>}
+        </div>
+        <div className="mt-2 flex items-center justify-between">
+          <p className="text-sm text-muted-foreground">
+            {total} pacientes detectados.
+          </p>
+          {loading && <p className="text-sm text-muted-foreground">Cargando…</p>}
+        </div>
+        {error && <p className="text-sm text-destructive">{error}</p>}
       </div>
 
-      {error && <p className="text-sm text-destructive">{error}</p>}
-
-      {rows.length === 0 && !loading ? (
-        <Card>
-          <CardContent className="pt-6">
-            <p className="text-sm text-muted-foreground">
-              {query || condicion
-                ? "Sin pacientes que coincidan con los filtros."
-                : "Sin pacientes crónicos detectados todavía."}
-            </p>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="space-y-2">
-          {rows.map((p) => (
-            <Card key={`${p.wa_identity}-${p.condicion}`}>
-              <CardHeader>
-                <div className="flex items-center justify-between gap-3">
-                  <CardTitle className="text-base">
-                    {p.nombre ?? p.wa_identity}
-                  </CardTitle>
-                  <div className="flex items-center gap-2">
-                    <Badge variant={(NIVEL_COLOR[p.nivel] ?? "default") as never}>
-                      {p.nivel}
-                    </Badge>
-                    {p.consent && <Badge variant="success">Consentido</Badge>}
+      {/* Listado con scroll interno */}
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-6">
+        {rows.length === 0 && !loading ? (
+          <Card>
+            <CardContent className="pt-6">
+              <p className="text-sm text-muted-foreground">
+                {query || condicion
+                  ? "Sin pacientes que coincidan con los filtros."
+                  : "Sin pacientes crónicos detectados todavía."}
+              </p>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="space-y-2">
+            {rows.map((p) => (
+              <Card key={`${p.wa_identity}-${p.condicion}`}>
+                <CardHeader>
+                  <div className="flex items-center justify-between gap-3">
+                    <CardTitle className="text-base">
+                      {p.nombre ?? p.wa_identity}
+                    </CardTitle>
+                    <div className="flex items-center gap-2">
+                      <Badge variant={(NIVEL_COLOR[p.nivel] ?? "default") as never}>
+                        {p.nivel}
+                      </Badge>
+                      {p.consent && <Badge variant="success">Consentido</Badge>}
+                    </div>
                   </div>
-                </div>
-                <CardDescription>
-                  {p.condicion}
-                  {p.telefono ? ` · ${formatPhone(p.telefono)}` : ""}
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-3 text-sm">
-                <div className="text-muted-foreground">
-                  Confianza: {p.confianza} consulta{p.confianza === 1 ? "" : "s"} ·
-                  Actualizado: {new Date(p.updated_at).toLocaleDateString()}
-                </div>
-                {p.medicamentos && p.medicamentos.length > 0 && (
-                  <div>
-                    <p className="mb-1.5 text-xs font-medium text-muted-foreground">
-                      Medicamentos consultados que sustentan la condición:
-                    </p>
-                    <ul className="space-y-1">
-                      {p.medicamentos.map((m) => (
-                        <li
-                          key={m.term}
-                          className="flex items-center justify-between gap-3 rounded-md border bg-muted/40 px-2.5 py-1.5"
-                        >
-                          <span className="font-medium">{m.term}</span>
-                          <span className="shrink-0 text-xs text-muted-foreground">
-                            {m.veces} consulta{m.veces === 1 ? "" : "s"}
-                            {m.ultima
-                              ? ` · ${new Date(m.ultima).toLocaleDateString()}`
-                              : ""}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
+                  <CardDescription>
+                    {p.condicion}
+                    {p.telefono ? ` · ${formatPhone(p.telefono)}` : ""}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-3 text-sm">
+                  <div className="text-muted-foreground">
+                    Confianza: {p.confianza} consulta{p.confianza === 1 ? "" : "s"} ·
+                    Actualizado: {new Date(p.updated_at).toLocaleDateString()}
                   </div>
-                )}
-              </CardContent>
-            </Card>
-          ))}
-          {/* Centinela para scroll infinito */}
-          <div ref={sentinelRef} className="h-1" />
-          {loading && (
-            <p className="py-4 text-center text-sm text-muted-foreground">
-              Cargando más…
-            </p>
-          )}
-          {!hasMore && rows.length > 0 && (
-            <p className="py-4 text-center text-sm text-muted-foreground">
-              Fin de la lista.
-            </p>
-          )}
-        </div>
-      )}
+                  {p.medicamentos && p.medicamentos.length > 0 && (
+                    <div>
+                      <p className="mb-1.5 text-xs font-medium text-muted-foreground">
+                        Medicamentos consultados que sustentan la condición:
+                      </p>
+                      <ul className="space-y-1">
+                        {p.medicamentos.map((m) => (
+                          <li
+                            key={m.term}
+                            className="flex items-center justify-between gap-3 rounded-md border bg-muted/40 px-2.5 py-1.5"
+                          >
+                            <span className="font-medium">{m.term}</span>
+                            <span className="shrink-0 text-xs text-muted-foreground">
+                              {m.veces} consulta{m.veces === 1 ? "" : "s"}
+                              {m.ultima
+                                ? ` · ${new Date(m.ultima).toLocaleDateString()}`
+                                : ""}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            ))}
+            {/* Centinela para scroll infinito */}
+            <div ref={sentinelRef} className="h-1" />
+            {loading && (
+              <p className="py-4 text-center text-sm text-muted-foreground">
+                Cargando más…
+              </p>
+            )}
+            {!hasMore && rows.length > 0 && (
+              <p className="py-4 text-center text-sm text-muted-foreground">
+                Fin de la lista.
+              </p>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
