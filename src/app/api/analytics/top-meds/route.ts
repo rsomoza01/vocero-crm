@@ -1,5 +1,7 @@
 import { withAuth } from "@/lib/api";
 import { getEnv } from "@/lib/env";
+import { getDb, schema } from "@/lib/db";
+import { eq } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
 
@@ -9,8 +11,22 @@ export const dynamic = "force-dynamic";
  */
 export const GET = withAuth(async (session, req: Request) => {
   const env = getEnv();
+  // nea-agent registra las consultas con el providerId del catálogo Firebase
+  // (multi-tenant: cada farmacia = un provider), NO con el id de la org del
+  // CRM. Resolverlo de la organización, igual que /api/bot/context.
+  const db = getDb();
+  const orgRows = await db
+    .select({ providerId: schema.organization.providerId })
+    .from(schema.organization)
+    .where(eq(schema.organization.id, session.organizationId))
+    .limit(1);
+  const providerId = orgRows[0]?.providerId ?? "";
+  if (!providerId) {
+    return Response.json({ provider_id: "", top: [] }, { status: 200 });
+  }
+
   const url = new URL(`${env.NEA_AGENT_URL}/analytics/top-meds`);
-  url.searchParams.set("provider_id", session.organizationId);
+  url.searchParams.set("provider_id", providerId);
   const q = new URL(req.url).searchParams;
   const desde = q.get("desde");
   const hasta = q.get("hasta");
