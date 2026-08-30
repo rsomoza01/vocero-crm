@@ -1,8 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import Link from "next/link";
-import { Check, ChevronRight, Sparkles, UserRound } from "lucide-react";
+import { Check, ChevronRight, UserRound } from "lucide-react";
 import type {
   ConversationDto,
   FichaDto,
@@ -239,28 +238,6 @@ export function ContactPanel({
                 />
               </button>
             </div>
-
-            {!agentReady && (
-              <div className="mt-2.5 flex items-start gap-2 rounded-md border border-warning-soft bg-warning-tint p-2.5">
-                <Sparkles
-                  className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning-text"
-                  strokeWidth={1.7}
-                />
-                <p className="text-[11px] leading-relaxed text-warning-text">
-                  {aiConfigured
-                    ? "El agente de Vocero no responde por su cuenta. Configura lo básico y enciéndelo (o conecta tu propio bot por la API)."
-                    : "El agente de Vocero no está activo. Conecta tu propio bot por la API o configura el agente."}
-                  {aiConfigured && (
-                    <Link
-                      href="/agent"
-                      className="ml-1 whitespace-nowrap font-medium text-brand-text underline underline-offset-2 hover:text-brand"
-                    >
-                      Configurar agente →
-                    </Link>
-                  )}
-                </p>
-              </div>
-            )}
           </div>
         </section>
 
