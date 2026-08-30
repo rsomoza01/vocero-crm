@@ -1,20 +1,25 @@
 import { withAuth } from "@/lib/api";
 import { getEnv } from "@/lib/env";
 import { getDb, schema } from "@/lib/db";
-import { eq } from "drizzle-orm";
+import { and, eq, ilike, or, sql } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Proxy a nea-agent: pacientes con condición crónica detectada.
- * GET /api/analytics/chronic-patients?consentidos=1
+ * Proxy a nea-agent: pacientes con condición crónica detectada, con
+ * paginación y filtros (nombre, condición, teléfono).
+ * GET /api/analytics/chronic-patients?q=...&condicion=...&consentidos=1&page=1&limit=20
+ *
+ * El filtro por nombre/teléfono se resuelve en la tabla `contact` del CRM
+ * (que tiene name/phone), y las identidades resultantes se pasan a nea-agent
+ * para que filtre los perfiles. La condición y la paginación van a nea-agent.
  */
 export const GET = withAuth(async (session, req: Request) => {
   const env = getEnv();
-  // nea-agent registra los perfiles con el providerId del catálogo Firebase
-  // (multi-tenant: cada farmacia = un provider), NO con el id de la org del
-  // CRM. Resolverlo de la organización, igual que /api/bot/context.
   const db = getDb();
+
+  // providerId del catálogo Firebase (multi-tenant: cada farmacia = un
+  // provider), NO el id de la org del CRM.
   const orgRows = await db
     .select({ providerId: schema.organization.providerId })
     .from(schema.organization)
@@ -22,19 +27,84 @@ export const GET = withAuth(async (session, req: Request) => {
     .limit(1);
   const providerId = orgRows[0]?.providerId ?? "";
   if (!providerId) {
-    return Response.json({ provider_id: "", pacientes: [] }, { status: 200 });
+    return Response.json({ provider_id: "", pacientes: [], total: 0 }, { status: 200 });
+  }
+
+  const q = new URL(req.url).searchParams;
+  const query = q.get("q")?.trim() ?? "";
+  const condicion = q.get("condicion")?.trim() ?? "";
+  const consentidos = q.get("consentidos");
+  const page = Math.max(1, Number(q.get("page") ?? "1") || 1);
+  const limit = Math.max(1, Math.min(Number(q.get("limit") ?? "20") || 20, 100));
+
+  // Filtro por nombre/teléfono: resolver las wa_identity de los contactos de
+  // la org que coinciden, y pasarlas a nea-agent.
+  let waIdentitys: string[] | null = null;
+  if (query) {
+    const qLike = `%${query.replace(/[\\%_]/g, "\\$&")}%`;
+    const contacts = await db
+      .select({ waIdentity: schema.contact.waIdentity })
+      .from(schema.contact)
+      .where(
+        and(
+          eq(schema.contact.organizationId, session.organizationId),
+          or(
+            ilike(schema.contact.name, qLike),
+            ilike(sql`coalesce(${schema.contact.phone}, '')`, qLike)
+          )
+        )
+      )
+      .limit(500);
+    waIdentitys = contacts.map((c) => c.waIdentity);
+    // Si el filtro no matchea ningún contacto, no hay pacientes que mostrar.
+    if (waIdentitys.length === 0) {
+      return Response.json({ provider_id: providerId, pacientes: [], total: 0 }, { status: 200 });
+    }
   }
 
   const url = new URL(`${env.NEA_AGENT_URL}/analytics/chronic-patients`);
   url.searchParams.set("provider_id", providerId);
-  const q = new URL(req.url).searchParams;
-  const consentidos = q.get("consentidos");
+  url.searchParams.set("page", String(page));
+  url.searchParams.set("limit", String(limit));
+  if (condicion) url.searchParams.set("condicion", condicion);
   if (consentidos) url.searchParams.set("consentidos", consentidos);
+  if (waIdentitys) url.searchParams.set("wa_identitys", waIdentitys.join(","));
 
   const res = await fetch(url.toString(), {
     headers: { "X-API-Key": env.BOT_API_KEY ?? "" },
   }).catch(() => null);
   if (!res) return Response.json({ error: "agente no disponible" }, { status: 502 });
-  const data = await res.json().catch(() => null);
-  return Response.json(data ?? { error: "respuesta inválida" }, { status: res.status });
+  const data = (await res.json().catch(() => null)) as {
+    pacientes?: { wa_identity: string }[];
+    total?: number;
+  } | null;
+  if (!data) return Response.json({ error: "respuesta inválida" }, { status: res.status });
+
+  // Enriquecer con nombre/teléfono del contacto (tabla contact del CRM).
+  const pacientes = data.pacientes ?? [];
+  let contactMap = new Map<string, { name: string; phone: string | null }>();
+  if (pacientes.length > 0) {
+    const ids = pacientes.map((p) => p.wa_identity);
+    const contacts = await db
+      .select({ waIdentity: schema.contact.waIdentity, name: schema.contact.name, phone: schema.contact.phone })
+      .from(schema.contact)
+      .where(
+        and(
+          eq(schema.contact.organizationId, session.organizationId),
+          or(...ids.map((id) => eq(schema.contact.waIdentity, id)))
+        )
+      );
+    contactMap = new Map(contacts.map((c) => [c.waIdentity, { name: c.name, phone: c.phone }]));
+  }
+
+  const enriquecidos = pacientes.map((p) => {
+    const c = contactMap.get(p.wa_identity);
+    return { ...p, nombre: c?.name ?? p.wa_identity, telefono: c?.phone ?? null };
+  });
+
+  return Response.json({
+    provider_id: providerId,
+    pacientes: enriquecidos,
+    total: data.total ?? enriquecidos.length,
+  });
 });
