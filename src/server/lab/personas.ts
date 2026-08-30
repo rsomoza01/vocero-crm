@@ -9,6 +9,8 @@
  * disparar los flujos reales: consulta, genéricos, carrito, receta, escalado.
  */
 
+import { RECETA_FOTO_BASE64 } from "./receta_base64";
+
 export type Persona = {
   key: string;
   label: string;
@@ -17,6 +19,12 @@ export type Persona = {
   phone: string;
   contactName: string;
   script: string[];
+  /**
+   * Imagen de receta (base64) para el personaje de receta por foto. Si una
+   * línea del script es exactamente "[FOTO]", el runner envía esta imagen al
+   * agente (imageBase64) en vez de texto, simulando una foto de receta.
+   */
+  imageBase64?: string;
 };
 
 export const PERSONAS: Persona[] = [
@@ -97,6 +105,20 @@ export const PERSONAS: Persona[] = [
       "oiga y que me cuesta la fexofenasina?",
       "dame 3 cajas de la mas barata de esoz",
       "va, listo, eso es todo vale",
+    ],
+  },
+  {
+    key: "receta_foto",
+    label: "Receta por foto",
+    description: "Manda una foto de su receta (OCR) y pide los medicamentos.",
+    phone: "5210000000007",
+    contactName: "[Prueba] Receta por foto",
+    imageBase64: RECETA_FOTO_BASE64,
+    script: [
+      "Hola, te mando la foto de mi receta",
+      "[FOTO]",
+      "¿Cuánto sale todo eso?",
+      "Ok, quiero 1 caja de cada uno",
     ],
   },
 ];

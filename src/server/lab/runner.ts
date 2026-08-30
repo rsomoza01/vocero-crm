@@ -189,13 +189,14 @@ async function runConversation(
 
   for (const line of persona.script) {
     const now = new Date();
+    const isPhoto = line === "[FOTO]";
     await db.insert(schema.message).values({
       id: newId("message"),
       organizationId,
       conversationId: convId,
       direction: "in",
-      type: "text",
-      text: line,
+      type: isPhoto ? "image" : "text",
+      text: isPhoto ? null : line,
       status: "delivered",
       waTimestamp: now,
     });
@@ -208,10 +209,13 @@ async function runConversation(
     // cliente a /api/chat, que corre el turno completo (catálogo, backstops,
     // carrito) y devuelve las respuestas capturadas SIN enviarlas por
     // WhatsApp (is_test). Las persistimos como salientes del sandbox.
+    // Si la línea es "[FOTO]", se envía la imagen de receta (imageBase64)
+    // para probar el flujo de OCR de receta por foto.
     const replies = await callNeaChat({
       conversationId: convId,
-      text: line,
+      text: isPhoto ? "" : line,
       waIdentity: persona.phone,
+      imageBase64: isPhoto ? persona.imageBase64 : undefined,
     });
     for (const reply of replies) {
       await db.insert(schema.message).values({
@@ -334,6 +338,7 @@ async function callNeaChat(input: {
   conversationId: string;
   text: string;
   waIdentity: string;
+  imageBase64?: string;
 }): Promise<string[]> {
   const env = getEnv();
   const baseUrl = env.NEA_AGENT_URL;
@@ -349,6 +354,7 @@ async function callNeaChat(input: {
       conversationId: input.conversationId,
       text: input.text,
       waIdentity: input.waIdentity,
+      imageBase64: input.imageBase64,
     }),
   }).catch((err) => {
     console.warn(`[lab] nea-agent /api/chat falló: ${err}`);
