@@ -13,6 +13,7 @@ type Paciente = {
   consent: boolean;
   first_seen_at: string;
   updated_at: string;
+  medicamentos?: { term: string; veces: number; ultima: string | null }[];
 };
 
 const NIVEL_COLOR: Record<string, string> = {
@@ -81,9 +82,34 @@ export function PatientsClient() {
                 </div>
                 <CardDescription>{p.condicion}</CardDescription>
               </CardHeader>
-              <CardContent className="text-sm text-muted-foreground">
-                Confianza: {Math.round(p.confianza * 100)}% · Actualizado:{" "}
-                {new Date(p.updated_at).toLocaleDateString()}
+              <CardContent className="space-y-3 text-sm">
+                <div className="text-muted-foreground">
+                  Confianza: {p.confianza} consulta{p.confianza === 1 ? "" : "s"} ·
+                  Actualizado: {new Date(p.updated_at).toLocaleDateString()}
+                </div>
+                {p.medicamentos && p.medicamentos.length > 0 && (
+                  <div>
+                    <p className="mb-1.5 text-xs font-medium text-muted-foreground">
+                      Medicamentos consultados que sustentan la condición:
+                    </p>
+                    <ul className="space-y-1">
+                      {p.medicamentos.map((m) => (
+                        <li
+                          key={m.term}
+                          className="flex items-center justify-between gap-3 rounded-md border bg-muted/40 px-2.5 py-1.5"
+                        >
+                          <span className="font-medium">{m.term}</span>
+                          <span className="shrink-0 text-xs text-muted-foreground">
+                            {m.veces} consulta{m.veces === 1 ? "" : "s"}
+                            {m.ultima
+                              ? ` · ${new Date(m.ultima).toLocaleDateString()}`
+                              : ""}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </CardContent>
             </Card>
           ))}
