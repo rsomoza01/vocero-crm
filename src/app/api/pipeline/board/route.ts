@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull } from "drizzle-orm";
+import { and, asc, eq, isNotNull } from "drizzle-orm";
 import { withAuth } from "@/lib/api";
 import { getDb, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
@@ -40,7 +40,7 @@ export const GET = withAuth(async (session) => {
         // pero Evolution no mandó su número; cuando vuelvan a escribir y el
         // número real llegue en SenderAlt, el contacto se fusiona (phone se
         // rellena) y reaparece automáticamente.
-        isNull(schema.contact.phone)
+        isNotNull(schema.contact.phone)
       )
     )
     .orderBy(asc(schema.lead.position));

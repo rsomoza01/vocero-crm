@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, gt, isNotNull, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
 import { isWindowOpen, windowRemainingMs } from "@/server/inbox/window";
@@ -59,7 +59,7 @@ export async function listConversations(
         // pero Evolution no mandó su número; cuando vuelvan a escribir y el
         // número real llegue en SenderAlt, el contacto se fusiona (phone se
         // rellena) y reaparece automáticamente.
-        isNull(schema.contact.phone),
+        isNotNull(schema.contact.phone),
         since ? gt(schema.conversation.updatedAt, since) : undefined
       )
     )
