@@ -1,7 +1,7 @@
 import { withAuth } from "@/lib/api";
 import { getEnv } from "@/lib/env";
 import { getDb, schema } from "@/lib/db";
-import { and, eq, ilike, or, sql } from "drizzle-orm";
+import { and, eq, ilike, not, or, sql } from "drizzle-orm";
 
 export const dynamic = "force-dynamic";
 
@@ -48,6 +48,7 @@ export const GET = withAuth(async (session, req: Request) => {
       .where(
         and(
           eq(schema.contact.organizationId, session.organizationId),
+          not(ilike(schema.contact.name, "[Prueba]%")),
           or(
             ilike(schema.contact.name, qLike),
             ilike(sql`coalesce(${schema.contact.phone}, '')`, qLike)
@@ -81,6 +82,9 @@ export const GET = withAuth(async (session, req: Request) => {
   if (!data) return Response.json({ error: "respuesta inválida" }, { status: res.status });
 
   // Enriquecer con nombre/teléfono del contacto (tabla contact del CRM).
+  // Se EXCLUYEN también aquí los contactos de prueba del Laboratorio
+  // ('[Prueba]...') por si nea-agent devolvió perfiles de ellos (caso sin
+  // filtro de búsqueda, donde no pasamos wa_identitys al agente).
   const pacientes = data.pacientes ?? [];
   let contactMap = new Map<string, { name: string; phone: string | null }>();
   if (pacientes.length > 0) {
@@ -97,7 +101,15 @@ export const GET = withAuth(async (session, req: Request) => {
     contactMap = new Map(contacts.map((c) => [c.waIdentity, { name: c.name, phone: c.phone }]));
   }
 
-  const enriquecidos = pacientes.map((p) => {
+  // Descartar los pacientes de prueba del Laboratorio: son contactos cuya
+  // wa_identity no está en la org o cuyo nombre empieza con '[Prueba]'. Solo
+  // se deja a los que son pacientes reales (el contacto legítimo existe).
+  const reales = pacientes.filter((p) => {
+    const c = contactMap.get(p.wa_identity);
+    return c && !c.name.startsWith("[Prueba]");
+  });
+
+  const enriquecidos = reales.map((p) => {
     const c = contactMap.get(p.wa_identity);
     return { ...p, nombre: c?.name ?? p.wa_identity, telefono: c?.phone ?? null };
   });
@@ -105,6 +117,6 @@ export const GET = withAuth(async (session, req: Request) => {
   return Response.json({
     provider_id: providerId,
     pacientes: enriquecidos,
-    total: data.total ?? enriquecidos.length,
+    total: enriquecidos.length,
   });
 });
