@@ -5,10 +5,10 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
   BarChart3,
-  FlaskConical,
+  // FlaskConical (Laboratorio, oculto temporalmente),
   HeartPulse,
   Inbox,
-  Kanban,
+  // Kanban (Pipeline, oculto temporalmente),
   LogOut,
   Settings,
   Sparkles,
@@ -25,12 +25,14 @@ import { APP_VERSION, BUILD_COMMIT, versionLabel } from "@/lib/version";
 
 const NAV = [
   { href: "/inbox", label: "Bandeja", icon: Inbox, badge: true },
-  { href: "/pipeline", label: "Pipeline", icon: Kanban },
+  // Pipeline oculto temporalmente mientras se desarrollan las demás opciones.
+  // { href: "/pipeline", label: "Pipeline", icon: Kanban },
   { href: "/contacts", label: "Contactos", icon: Users },
   { href: "/agent", label: "Agente", icon: Sparkles },
   { href: "/analytics", label: "Analítica", icon: BarChart3 },
   { href: "/pacientes", label: "Pacientes", icon: HeartPulse },
-  { href: "/lab", label: "Laboratorio", icon: FlaskConical },
+  // Laboratorio oculto temporalmente mientras se desarrollan las demás opciones.
+  // { href: "/lab", label: "Laboratorio", icon: FlaskConical },
 ] as const;
 
 export function AppNav({
