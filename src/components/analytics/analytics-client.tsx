@@ -6,13 +6,15 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
-type TopMed = { term: string; consultas: number; agregados: number };
+type TopMed = { term: string; consultas: number; disponibles: number; fallas: number; agregados: number };
+type Summary = { consultas: number; disponibles: number; fallas: number };
 
 const PAGE_SIZE = 25;
 
 export function AnalyticsClient() {
   const [rows, setRows] = useState<TopMed[]>([]);
   const [total, setTotal] = useState(0);
+  const [summary, setSummary] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [desde, setDesde] = useState("");
@@ -44,10 +46,11 @@ export function AnalyticsClient() {
       setError("No se pudo cargar la analítica.");
       return;
     }
-    const data = (await res.json()) as { top?: TopMed[]; total?: number };
+    const data = (await res.json()) as { top?: TopMed[]; total?: number; summary?: Summary };
     const newRows = data.top ?? [];
     const t = data.total ?? 0;
     setTotal(t);
+    if (data.summary) setSummary(data.summary);
     setPage(p);
     setHasMore(p * PAGE_SIZE < t);
     setRows((prev) => (reset ? newRows : [...prev, ...newRows]));
@@ -130,7 +133,22 @@ export function AnalyticsClient() {
           <CardHeader>
             <CardTitle>Top de medicamentos consultados</CardTitle>
             <CardDescription>
-              {rows.length} de {total} medicamentos · {totalConsultas} consultas en la página.
+              {summary ? (
+                <span className="flex flex-wrap gap-x-4 gap-y-1">
+                  <span>{summary.consultas} consultas en total</span>
+                  <span className="font-medium text-emerald-600">
+                    {summary.disponibles} disponibles
+                  </span>
+                  <span className="font-medium text-destructive">
+                    {summary.fallas} en falla
+                  </span>
+                  <span className="text-muted-foreground">
+                    · mostrando {rows.length} de {total} medicamentos
+                  </span>
+                </span>
+              ) : (
+                <>{rows.length} de {total} medicamentos · {totalConsultas} consultas en la página.</>
+              )}
             </CardDescription>
           </CardHeader>
         </Card>
@@ -151,6 +169,8 @@ export function AnalyticsClient() {
                 </div>
                 <div className="flex items-center gap-4 text-sm">
                   <span className="text-muted-foreground">{r.consultas} consultas</span>
+                  <span className="font-medium text-emerald-600">{r.disponibles} disp.</span>
+                  <span className="font-medium text-destructive">{r.fallas} falla</span>
                   <span className="text-muted-foreground">{r.agregados} al carrito</span>
                 </div>
               </li>
