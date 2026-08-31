@@ -3,7 +3,6 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { signUp } from "@/lib/auth/client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -14,6 +13,8 @@ export default function RegisterPage() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [farmacia, setFarmacia] = useState("");
+  const [providerId, setProviderId] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -21,22 +22,33 @@ export default function RegisterPage() {
     e.preventDefault();
     setError(null);
     setLoading(true);
-    const { error: err } = await signUp.email({ name, email, password });
-    setLoading(false);
-    if (err) {
-      if (err.status === 403) {
-        setError(
-          "El registro está cerrado: esta instancia ya tiene su organización. Pide acceso al propietario."
-        );
-      } else if (err.status === 429) {
-        setError("Demasiados intentos. Espera unos minutos.");
-      } else {
-        setError(err.message ?? "No se pudo crear la cuenta.");
+    try {
+      const res = await fetch("/api/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          email,
+          password,
+          farmacia: farmacia.trim() || undefined,
+          providerId: providerId.trim() || undefined,
+        }),
+      });
+      const data = (await res.json().catch(() => null)) as {
+        error?: { message?: string };
+        redirectTo?: string;
+      } | null;
+      if (!res.ok) {
+        setError(data?.error?.message ?? "No se pudo crear la cuenta.");
+        setLoading(false);
+        return;
       }
-      return;
+      router.push(data?.redirectTo ?? "/inbox");
+      router.refresh();
+    } catch {
+      setError("No se pudo crear la cuenta.");
+      setLoading(false);
     }
-    router.push("/inbox");
-    router.refresh();
   }
 
   return (
@@ -44,7 +56,7 @@ export default function RegisterPage() {
       <CardHeader>
         <CardTitle>Crear cuenta</CardTitle>
         <CardDescription>
-          El primer registro crea la organización de esta instancia y queda
+          Cada registro crea una organización nueva para tu farmacia y te deja
           como propietario.
         </CardDescription>
       </CardHeader>
@@ -80,6 +92,24 @@ export default function RegisterPage() {
               minLength={8}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="farmacia">Nombre de la farmacia</Label>
+            <Input
+              id="farmacia"
+              placeholder="ej. Farma Union Plus"
+              value={farmacia}
+              onChange={(e) => setFarmacia(e.target.value)}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="providerId">ID de proveedor (catálogo)</Label>
+            <Input
+              id="providerId"
+              placeholder="ej. 19"
+              value={providerId}
+              onChange={(e) => setProviderId(e.target.value)}
             />
           </div>
           {error && <p className="text-sm text-destructive">{error}</p>}
