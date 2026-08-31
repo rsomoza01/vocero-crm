@@ -30,10 +30,14 @@ export const GET = withAuth(async (session, req: Request) => {
   const q = new URL(req.url).searchParams;
   const desde = q.get("desde");
   const hasta = q.get("hasta");
-  const top = q.get("top");
+  const termin = q.get("q");
+  const page = q.get("page");
+  const limit = q.get("limit");
   if (desde) url.searchParams.set("desde", desde);
   if (hasta) url.searchParams.set("hasta", hasta);
-  if (top) url.searchParams.set("top", top);
+  if (termin) url.searchParams.set("q", termin);
+  if (page) url.searchParams.set("page", page);
+  if (limit) url.searchParams.set("limit", limit);
 
   const res = await fetch(url.toString(), {
     headers: { "X-API-Key": env.BOT_API_KEY ?? "" },
