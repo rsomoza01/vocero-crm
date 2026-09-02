@@ -1,4 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
+import { eq, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { apiError } from "@/lib/api";
 import { checkRateLimit } from "@/lib/rate-limit";
@@ -31,19 +32,40 @@ export function requireBotKey(req: Request): Response | null {
 }
 
 /**
- * Organización única de la instancia (self-hosted, un negocio). Cacheada en
- * memoria: la instancia jamás cambia de organización en runtime.
+ * Organización de la instancia. En un CRM self-hosted multi-tenant, la instancia
+ * Evolution define la organización: cada instancia está ligada a exactamente una
+ * organización vía evolution_credentials. Resolver por esa tabla es DETERMINISTA.
+ *
+ * El viejo `SELECT id FROM organization LIMIT 1` (sin ORDER BY) devolvía una org
+ * casi arbitraria según el orden físico de las filas, y en la práctica agarraba la
+ * org de prueba (provider 99) en vez de la del negocio real → el agente buscaba en
+ * el catálogo equivocado ("No encontré ibutan" aunque existe en provider 05).
  */
 let cachedOrgId: string | null = null;
 
 export async function resolveInstanceOrg(): Promise<string | null> {
   if (cachedOrgId) return cachedOrgId;
   const db = getDb();
-  const rows = await db
+  // 1) Determino la org por la instancia Evolution conectada (la que recibe los
+  //    mensajes de WhatsApp). Es la identidad real del tenant.
+  const byInstance = await db
+    .select({ organizationId: schema.evolutionCredentials.organizationId })
+    .from(schema.evolutionCredentials)
+    .where(eq(schema.evolutionCredentials.status, "connected"))
+    .limit(1);
+  if (byInstance[0]?.organizationId) {
+    cachedOrgId = byInstance[0].organizationId;
+    return cachedOrgId;
+  }
+  // 2) Respaldo: la primera org del negocio con catálogo (provider_id no nulo),
+  //    nunca test sin provider.
+  const fallback = await db
     .select({ id: schema.organization.id })
     .from(schema.organization)
+    .where(sql`${schema.organization.providerId} is not null`)
+    .orderBy(schema.organization.createdAt)
     .limit(1);
-  cachedOrgId = rows[0]?.id ?? null;
+  cachedOrgId = fallback[0]?.id ?? null;
   return cachedOrgId;
 }
 
