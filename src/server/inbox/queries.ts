@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, sql } from "drizzle-orm";
+import { and, desc, eq, gt, isNotNull, sql } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
 import { isWindowOpen, windowRemainingMs } from "@/server/inbox/window";
@@ -54,6 +54,12 @@ export async function listConversations(
         schema.conversation.organizationId,
         organizationId,
         eq(schema.conversation.isTest, false),
+        // Ocultar de la bandeja los contactos sin teléfono (LID/bsuid de
+        // privacidad de WhatsApp Business). Son personas reales que escribieron
+        // pero Evolution no mandó su número; cuando vuelvan a escribir y el
+        // número real llegue en SenderAlt, el contacto se fusiona (phone se
+        // rellena) y reaparece automáticamente.
+        isNotNull(schema.contact.phone),
         since ? gt(schema.conversation.updatedAt, since) : undefined
       )
     )
