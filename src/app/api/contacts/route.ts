@@ -1,4 +1,4 @@
-import { desc, eq, inArray, isNotNull, or, sql } from "drizzle-orm";
+import { desc, eq, inArray, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { apiError, parseBody, withAuth } from "@/lib/api";
 import { getDb, schema } from "@/lib/db";
@@ -83,12 +83,6 @@ export const GET = withAuth(async (session, req: Request) => {
         session.organizationId,
         search,
         stageContactIds ? inArray(schema.contact.id, stageContactIds) : undefined,
-        // Ocultar de la vista de Contactos los contactos sin teléfono
-        // (LID/bsuid de privacidad de WhatsApp Business). Son personas reales
-        // que escribieron pero Evolution no mandó su número; cuando vuelvan a
-        // escribir y el número real llegue en SenderAlt, el contacto se fusiona
-        // (phone se rellena) y reaparece automáticamente.
-        isNotNull(schema.contact.phone)
       )
     )
     .orderBy(desc(schema.contact.updatedAt))

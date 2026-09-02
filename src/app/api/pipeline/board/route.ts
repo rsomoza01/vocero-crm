@@ -1,4 +1,4 @@
-import { and, asc, eq, isNotNull } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { withAuth } from "@/lib/api";
 import { getDb, schema } from "@/lib/db";
 import { scoped } from "@/lib/db/tenant";
@@ -35,12 +35,6 @@ export const GET = withAuth(async (session) => {
       scoped(
         schema.lead.organizationId,
         session.organizationId,
-        // Ocultar del pipeline los contactos sin teléfono (LID/bsuid de
-        // privacidad de WhatsApp Business). Son personas reales que escribieron
-        // pero Evolution no mandó su número; cuando vuelvan a escribir y el
-        // número real llegue en SenderAlt, el contacto se fusiona (phone se
-        // rellena) y reaparece automáticamente.
-        isNotNull(schema.contact.phone)
       )
     )
     .orderBy(asc(schema.lead.position));
