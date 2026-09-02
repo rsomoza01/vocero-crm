@@ -489,8 +489,16 @@ async function resolveOrgFromInstanceToken(
   instanceToken: string | undefined,
 ): Promise<string | null> {
   if (!instanceToken) return null;
-  const { getOrgByEvolutionTokenHash } = await import("@/server/whatsapp/evolution-credentials");
-  const orgId = await getOrgByEvolutionTokenHash(instanceToken);
+  const {
+    getOrgByEvolutionTokenHash,
+    hashToken,
+  } = await import("@/server/whatsapp/evolution-credentials");
+  // El hash del token (sha256) es lo que se guarda en evolution_credentials
+  // (instance_token_hash). getOrgByEvolutionTokenHash compara en igualdad, así
+  // que hay que hashear el instanceToken del payload ANTES de buscarlo; sin
+  // esto la comparación jamás encaja con la instancia correcta (multi-tenant),
+  // el webhook caía al fallback legacy y enrutaba al azar a otra organización.
+  const orgId = await getOrgByEvolutionTokenHash(hashToken(instanceToken));
   if (orgId) return orgId;
   // Legacy: token global del env.
   const env = getEnv();
