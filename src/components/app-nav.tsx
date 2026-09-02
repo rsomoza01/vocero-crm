@@ -8,7 +8,7 @@ import {
   // FlaskConical (Laboratorio, oculto temporalmente),
   HeartPulse,
   Inbox,
-  // Kanban (Pipeline, oculto temporalmente),
+  Kanban,
   LogOut,
   Settings,
   Sparkles,
@@ -25,8 +25,7 @@ import { APP_VERSION, BUILD_COMMIT, versionLabel } from "@/lib/version";
 
 const NAV = [
   { href: "/inbox", label: "Bandeja", icon: Inbox, badge: true },
-  // Pipeline oculto temporalmente mientras se desarrollan las demás opciones.
-  // { href: "/pipeline", label: "Pipeline", icon: Kanban },
+  { href: "/pipeline", label: "Pipeline", icon: Kanban },
   { href: "/contacts", label: "Contactos", icon: Users },
   { href: "/agent", label: "Agente", icon: Sparkles },
   { href: "/analytics", label: "Analítica", icon: BarChart3 },
