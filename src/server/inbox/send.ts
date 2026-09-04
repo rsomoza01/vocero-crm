@@ -17,7 +17,13 @@ import {
   validateOutgoing,
 } from "@/server/whatsapp/media";
 import { SendChannelError } from "@/server/whatsapp/channel";
-import { sendEvolutionText, sendEvolutionMedia } from "@/server/whatsapp/evolution";
+import {
+  sendEvolutionText,
+  sendEvolutionMedia,
+  sendEvolutionContact,
+  sendEvolutionLocation,
+} from "@/server/whatsapp/evolution";
+import { getEvolutionCredentialsByOrg } from "@/server/whatsapp/evolution-credentials";
 
 /** Error tipado del envío; `code` mapea a HTTP en la capa de API. */
 export class SendError extends Error {
@@ -529,6 +535,114 @@ export async function sendStructured(
     | { kind: "contacts"; contacts: ContactInput[] }
   )
 ): Promise<SendResult> {
+  // Canal Evolution: sin ventana de 24h, sin credenciales de Meta. Envía por
+  // /send/contact y /send/location con el token de la instancia multi-tenant.
+  if (getEnv().CHANNEL_PROVIDER === "evolution") {
+    const db = getDb();
+    const rows = await db
+      .select({ conversation: schema.conversation, contact: schema.contact })
+      .from(schema.conversation)
+      .innerJoin(
+        schema.contact,
+        eq(schema.conversation.contactId, schema.contact.id)
+      )
+      .where(eq(schema.conversation.id, input.conversationId))
+      .limit(1);
+    const row = rows[0];
+    if (!row || row.conversation.organizationId !== input.organizationId) {
+      throw new SendError("meta_error", "Conversación no encontrada");
+    }
+    if (row.conversation.isTest) {
+      throw new SendError(
+        "sandbox_violation",
+        "Conversación de prueba del Laboratorio: el envío real está prohibido"
+      );
+    }
+    const recipient = row.contact.phone
+      ? normalizeRecipient(row.contact.phone)
+      : row.contact.waUserId;
+    if (!recipient) {
+      throw new SendError(
+        "meta_error",
+        "El contacto no tiene teléfono ni identidad de WhatsApp utilizable"
+      );
+    }
+    const creds = await getEvolutionCredentialsByOrg(input.organizationId);
+    const token = creds?.instanceToken;
+    if (!token) {
+      throw new SendError(
+        "not_connected",
+        "No hay token de instancia de Evolution configurado"
+      );
+    }
+    const credentials = { provider: "evolution" as const, instanceToken: token };
+    let waMessageId: string;
+    try {
+      if (input.kind === "contacts") {
+        const c = input.contacts[0];
+        const result = await sendEvolutionContact({
+          organizationId: input.organizationId,
+          to: recipient,
+          name: c.name,
+          phone: c.phone,
+          credentials,
+        });
+        waMessageId = result.waMessageId;
+      } else {
+        const result = await sendEvolutionLocation({
+          organizationId: input.organizationId,
+          to: recipient,
+          latitude: input.location.latitude,
+          longitude: input.location.longitude,
+          name: input.location.name,
+          credentials,
+        });
+        waMessageId = result.waMessageId;
+      }
+    } catch (err) {
+      if (err instanceof SendChannelError) {
+        const code: SendError["code"] =
+          err.code === "not_connected"
+            ? "not_connected"
+            : err.code === "reconnect_required"
+              ? "reconnect_required"
+              : err.code === "window_closed"
+                ? "window_closed"
+                : err.code === "channel_unavailable"
+                  ? "meta_unavailable"
+                  : "meta_error";
+        throw new SendError(code, err.message);
+      }
+      throw err;
+    }
+
+    const assetRows = await db
+      .insert(schema.mediaAsset)
+      .values({
+        id: newId("mediaAsset"),
+        organizationId: input.organizationId,
+        kind: input.kind,
+        payload: input.kind === "location" ? input.location : input.contacts,
+        fetchStatus: "available",
+      })
+      .returning();
+    const asset = assetRows[0]!;
+
+    const messageId = await persistOutbound({
+      organizationId: input.organizationId,
+      conversationId: input.conversationId,
+      waMessageId,
+      type: input.kind,
+      text: null,
+      status: "pending",
+      origin: "operator",
+      mediaAssetId: asset.id,
+      media: asset,
+    });
+    return { messageId };
+  }
+
+  // Canal Meta: preparación con ventana de 24h + credenciales de Graph.
   const { credentials, recipient } = await prepareSend(
     input.conversationId,
     input.organizationId

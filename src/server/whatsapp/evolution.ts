@@ -11,6 +11,7 @@
 import { getEnv } from "@/lib/env";
 import {
   SendChannelError,
+  type ChannelCredentials,
   type ChannelSendResult,
   type SendMediaInput,
   type SendTextInput,
@@ -173,4 +174,84 @@ export function mapEvolutionError(
     return new SendChannelError("channel_unavailable", String(msg));
   }
   return new SendChannelError("channel_error", String(msg));
+}
+
+/** Envía un contacto (vCard) por Evolution GO. */
+export async function sendEvolutionContact(
+  input: {
+    organizationId: string;
+    to: string;
+    name: string;
+    phone: string;
+    credentials: ChannelCredentials;
+  },
+): Promise<ChannelSendResult> {
+  const token = input.credentials.instanceToken;
+  if (!token) {
+    throw new SendChannelError(
+      "not_connected",
+      "No hay token de instancia de Evolution conectado",
+    );
+  }
+  const { status, json } = await evolutionFetch("/send/contact", {
+    body: {
+      number: evolutionRecipient(input.to),
+      contactName: input.name,
+      contactPhone: input.phone,
+      formatJid: true,
+    },
+    instanceToken: token,
+  });
+  if (status !== 200) {
+    throw mapEvolutionError(status, json, input.organizationId);
+  }
+  const id = getPath(json, "data", "Info", "ID") ?? getPath(json, "data", "id");
+  if (!id) {
+    throw new SendChannelError(
+      "channel_error",
+      "Evolution no devolvió ID del contacto",
+    );
+  }
+  return { waMessageId: String(id) };
+}
+
+/** Envía una ubicación por Evolution GO. */
+export async function sendEvolutionLocation(
+  input: {
+    organizationId: string;
+    to: string;
+    latitude: number;
+    longitude: number;
+    name?: string | null;
+    credentials: ChannelCredentials;
+  },
+): Promise<ChannelSendResult> {
+  const token = input.credentials.instanceToken;
+  if (!token) {
+    throw new SendChannelError(
+      "not_connected",
+      "No hay token de instancia de Evolution conectado",
+    );
+  }
+  const { status, json } = await evolutionFetch("/send/location", {
+    body: {
+      number: evolutionRecipient(input.to),
+      latitude: input.latitude,
+      longitude: input.longitude,
+      name: input.name ?? "",
+      formatJid: true,
+    },
+    instanceToken: token,
+  });
+  if (status !== 200) {
+    throw mapEvolutionError(status, json, input.organizationId);
+  }
+  const id = getPath(json, "data", "Info", "ID") ?? getPath(json, "data", "id");
+  if (!id) {
+    throw new SendChannelError(
+      "channel_error",
+      "Evolution no devolvió ID de la ubicación",
+    );
+  }
+  return { waMessageId: String(id) };
 }
