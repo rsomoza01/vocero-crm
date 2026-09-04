@@ -15,12 +15,21 @@
  * (ingestInboundMessage) y responde 200 siempre.
  */
 import { after } from "next/server";
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { getEnv } from "@/lib/env";
 import { normalizeMx } from "@/lib/meta/client";
 import { getDb, schema } from "@/lib/db";
-import { ingestInboundMessage } from "@/server/inbox/ingest";
-import type { ResolvedIdentity } from "@/server/inbox/identity";
+import { newId } from "@/lib/db/ids";
+import { publish } from "@/server/events/bus";
+import {
+  getOrCreateConversation,
+  ingestInboundMessage,
+  serializeMessage,
+} from "@/server/inbox/ingest";
+import {
+  getOrCreateContactByIdentity,
+  type ResolvedIdentity,
+} from "@/server/inbox/identity";
 
 export const dynamic = "force-dynamic";
 
@@ -136,6 +145,38 @@ function extractText(message: unknown): string | null {
   if (image && typeof image.caption === "string") return image.caption;
   const video = m.videoMessage as Record<string, unknown> | undefined;
   if (video && typeof video.caption === "string") return video.caption;
+  return null;
+}
+
+/**
+ * ¿Es un ECHO (mensaje que el DUEÑO envió a mano desde su WhatsApp)?
+ * Evolution marca los mensajes salientes del dueño con `key.fromMe === true`.
+ * En ese caso el remitente detectado es el LID del dueño, pero el DESTINATARIO
+ * real está en `key.remoteJid`. Sin esto, la respuesta del dueño se ingesta
+ * como un mensaje entrante de un contacto fantasma (sin teléfono, invisible en
+ * la bandeja) en vez de como saliente en la conversación del cliente.
+ */
+function isEcho(data: Record<string, unknown> | undefined): boolean {
+  const fromMe = path(data, "key", "fromMe");
+  if (fromMe === true) return true;
+  // Fallback: el remitente detectado es el LID del dueño y el payload trae un
+  // destinatario distinto en key.remoteJid.
+  const remoteJid = path(data, "key", "remoteJid");
+  const sender = resolveRealSender(data);
+  if (typeof remoteJid === "string" && remoteJid && sender) {
+    const remoteNum = (remoteJid.split("@")[0] ?? "").trim();
+    if (remoteNum && remoteNum !== sender) return true;
+  }
+  return false;
+}
+
+/** Extrae el DESTINATARIO real de un echo (el cliente al que el dueño respondió). */
+function extractEchoRecipient(data: Record<string, unknown> | undefined): string | null {
+  const remoteJid = path(data, "key", "remoteJid");
+  if (typeof remoteJid === "string" && remoteJid) {
+    const num = (remoteJid.split("@")[0] ?? "").trim();
+    if (num) return num;
+  }
   return null;
 }
 
@@ -274,6 +315,31 @@ export async function POST(req: Request) {
           console.warn(
             `[evolution-webhook] no se pudo resolver la organización (instanceToken=${payload.instanceToken})`
           );
+          return;
+        }
+
+        // ECHO: mensaje que el DUEÑO envió a mano desde su WhatsApp. Se registra
+        // como SALIENTE en la conversación del DESTINATARIO (el cliente), no como
+        // entrante de un contacto fantasma (el LID del dueño, sin teléfono,
+        // invisible en la bandeja). Sin esto, la respuesta del dueño se pierde.
+        if (isEcho(data)) {
+          const recipient = extractEchoRecipient(data);
+          if (!recipient) {
+            console.warn(
+              `[evolution-webhook] echo sin destinatario (key.remoteJid) — descartado`
+            );
+            return;
+          }
+          console.log(
+            `[evolution-webhook] echo del dueño → ${recipient} msg=${messageId} text=${text ? JSON.stringify(text.slice(0, 60)) : "null"}`
+          );
+          await ingestManualEcho({
+            organizationId: orgId,
+            recipient,
+            waMessageId: messageId,
+            text,
+            timestamp: extractTimestamp(data),
+          });
           return;
         }
 
@@ -512,6 +578,100 @@ async function resolveOrgFromInstanceToken(
     `[evolution-webhook] instanceToken no coincide con ninguna instancia configurada`
   );
   return null;
+}
+
+/**
+ * Registra un ECHO (mensaje que el DUEÑO envió a mano desde su WhatsApp) como
+ * SALIENTE en la conversación del DESTINATARIO (el cliente). Sin esto, la
+ * respuesta del dueño se ingesta como un mensaje entrante de un contacto
+ * fantasma (el LID del dueño, sin teléfono, invisible en la bandeja) en vez de
+ * como saliente en el hilo del cliente. Idempotente por wa_message_id.
+ */
+async function ingestManualEcho(input: {
+  organizationId: string;
+  recipient: string; // número del cliente (destinatario)
+  waMessageId: string;
+  text: string | null;
+  timestamp: string;
+}): Promise<void> {
+  const db = getDb();
+  const phone = normalizeMx(input.recipient);
+
+  const { contact } = await getOrCreateContactByIdentity(input.organizationId, {
+    identity: phone,
+    phone,
+    waUserId: null,
+    profileName: null,
+  });
+  const conversation = await getOrCreateConversation(input.organizationId, contact.id);
+
+  const waTimestamp = toDate(input.timestamp);
+
+  const inserted = await db
+    .insert(schema.message)
+    .values({
+      id: newId("message"),
+      organizationId: input.organizationId,
+      conversationId: conversation.id,
+      waMessageId: input.waMessageId,
+      direction: "out",
+      type: "text",
+      text: input.text,
+      status: "sent",
+      origin: "manual",
+      waTimestamp,
+    })
+    .onConflictDoNothing({ target: [schema.message.waMessageId] })
+    .returning();
+  const message = inserted[0];
+  if (!message) return; // duplicado
+
+  // Solo lastMessageAt: un mensaje del negocio NUNCA abre la ventana de 24 h.
+  await db
+    .update(schema.conversation)
+    .set({ lastMessageAt: waTimestamp, updatedAt: new Date() })
+    .where(eq(schema.conversation.id, conversation.id));
+
+  // Pausa automática de la IA, idempotente y atómica (solo si no hay handoff).
+  const paused = await db
+    .update(schema.conversation)
+    .set({
+      aiEnabled: false,
+      handoffAt: new Date(),
+      handoffReason: "manual_reply",
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(schema.conversation.id, conversation.id),
+        sql`${schema.conversation.handoffAt} is null`
+      )
+    )
+    .returning();
+  if (paused[0]) {
+    console.log(
+      `[evolution-webhook] respuesta manual del dueño en ${conversation.id} — IA pausada (manual_reply)`
+    );
+  }
+
+  publish(input.organizationId, {
+    type: "message.new",
+    data: {
+      conversationId: conversation.id,
+      message: serializeMessage(message, null),
+    },
+  });
+  publish(input.organizationId, {
+    type: "conversation.updated",
+    data: { conversation: { id: conversation.id } },
+  });
+}
+
+/** Convierte un timestamp epoch (segundos) a Date. */
+function toDate(timestamp: string): Date {
+  const n = Number(timestamp);
+  if (Number.isFinite(n) && n > 0) return new Date(n * 1000);
+  return new Date();
 }
 
 /**
