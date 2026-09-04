@@ -30,14 +30,14 @@ export function AnalyticsClient() {
   const loadingRef = useRef(loading);
   loadingRef.current = loading;
 
-  const loadPage = useCallback(async (p: number, reset: boolean) => {
+  const loadPage = useCallback(async (p: number, reset: boolean, filters: { desde: string; hasta: string; q: string }) => {
     if (loadingRef.current) return;
     setLoading(true);
     setError(null);
     const q = new URLSearchParams();
-    if (applied.desde) q.set("desde", applied.desde);
-    if (applied.hasta) q.set("hasta", applied.hasta);
-    if (applied.q) q.set("q", applied.q);
+    if (filters.desde) q.set("desde", filters.desde);
+    if (filters.hasta) q.set("hasta", filters.hasta);
+    if (filters.q) q.set("q", filters.q);
     q.set("page", String(p));
     q.set("limit", String(PAGE_SIZE));
     const res = await fetch(`/api/analytics/top-meds?${q.toString()}`).catch(() => null);
@@ -54,18 +54,19 @@ export function AnalyticsClient() {
     setPage(p);
     setHasMore(p * PAGE_SIZE < t);
     setRows((prev) => (reset ? newRows : [...prev, ...newRows]));
-  }, [applied]);
+  }, []);
 
   const aplicar = () => {
-    setApplied({ desde, hasta, q: busqueda.trim() });
+    const filters = { desde, hasta, q: busqueda.trim() };
+    setApplied(filters);
     // Reset a página 1 en el primer scroll del listado.
     if (scrollRef.current) scrollRef.current.scrollTop = 0;
-    void loadPage(1, true);
+    void loadPage(1, true, filters);
   };
 
   useEffect(() => {
-    void loadPage(1, true);
-  }, [loadPage]);
+    void loadPage(1, true, applied);
+  }, [loadPage, applied]);
 
   // Scroll infinito: IntersectionObserver sobre el marcador de fin de lista,
   // con root = contenedor scrollable (el main del AppShell tiene overflow-hidden).
@@ -78,14 +79,14 @@ export function AnalyticsClient() {
       (entries) => {
         const first = entries[0];
         if (first?.isIntersecting && hasMore && !loadingRef.current) {
-          void loadPage(page + 1, false);
+          void loadPage(page + 1, false, applied);
         }
       },
       { root: el, rootMargin: "200px" }
     );
     obs.observe(sentinel);
     return () => obs.disconnect();
-  }, [hasMore, page, loadPage]);
+  }, [hasMore, page, loadPage, applied]);
 
   const totalConsultas = rows.reduce((s, r) => s + r.consultas, 0);
 
