@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, or } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { apiError } from "@/lib/api";
 import { requireBotKey, resolveInstanceOrg } from "@/server/bot/auth";
@@ -60,7 +60,15 @@ export async function GET(req: Request) {
       .where(
         and(
           eq(schema.contact.organizationId, organizationId),
-          eq(schema.contact.waIdentity, waIdentity)
+          // Resolver por waIdentity (LID/bsuid) O por phone (número real).
+          // nea-agent envía el número real (584249045990) cuando Evolution lo
+          // manda en SenderAlt, pero el contacto puede estar registrado con
+          // wa_identity = bsuid:<LID> (privacidad de WhatsApp Business). Sin
+          // este OR, el contexto devuelve 404 y el turno se silencia.
+          or(
+            eq(schema.contact.waIdentity, waIdentity),
+            eq(schema.contact.phone, waIdentity)
+          )
         )
       )
       .limit(1);
