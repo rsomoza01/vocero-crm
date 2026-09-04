@@ -580,6 +580,9 @@ export async function sendStructured(
     try {
       if (input.kind === "contacts") {
         const c = input.contacts[0];
+        if (!c) {
+          throw new SendError("meta_error", "No hay contacto para enviar");
+        }
         const result = await sendEvolutionContact({
           organizationId: input.organizationId,
           to: recipient,
