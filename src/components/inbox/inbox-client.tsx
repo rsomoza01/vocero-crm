@@ -63,10 +63,6 @@ export function InboxClient() {
   const selectedIdRef = useRef<string | null>(null);
   selectedIdRef.current = selectedId;
   const lastFetchRef = useRef<string | null>(null);
-  // Última vez que el SSE entregó un evento para esta bandeja. Si el SSE se
-  // cae o es amortiguado por el proxy (Railway/Caddy no garantiza long-poll),
-  // el polling de respaldo refetch y la bandeja no se queda congelada.
-  const lastSseActivityRef = useRef<number>(Date.now());
   const tmpSeq = useRef(0);
   // Los envíos salen en fila: el compositor ya no espera, pero WhatsApp debe
   // recibir "hola" antes que el renglón siguiente. Sin esta cadena, dos POST
@@ -119,7 +115,6 @@ export function InboxClient() {
 
   useEvents({
     onMessageNew: ({ conversationId, message }) => {
-      lastSseActivityRef.current = Date.now();
       if (selectedIdRef.current === conversationId) {
         const m = message as MessageDto;
         setMessages((prev) =>
@@ -136,7 +131,6 @@ export function InboxClient() {
       setDetailRev((v) => v + 1);
     },
     onMessageStatus: ({ conversationId, messageId, status, error }) => {
-      lastSseActivityRef.current = Date.now();
       if (selectedIdRef.current !== conversationId) return;
       setMessages((prev) =>
         prev.map((m) =>
@@ -151,13 +145,11 @@ export function InboxClient() {
       );
     },
     onConversationUpdated: () => {
-      lastSseActivityRef.current = Date.now();
       void refetchConversations();
       // El agente movió de etapa o cambió el handoff: refresca el panel en vivo.
       setDetailRev((v) => v + 1);
     },
     onReconnect: () => {
-      lastSseActivityRef.current = Date.now();
       // Catch-up tras reconexión (contrato sse.md): refetch completo.
       void refetchConversations();
       if (selectedIdRef.current) void refetchMessages(selectedIdRef.current);
@@ -165,23 +157,29 @@ export function InboxClient() {
     },
   });
 
-  // Polling de respaldo (contrato sse.md): el SSE no garantiza entrega — si el
-  // proxy amortigua la conexión o se cae sin que EventSource lo note, la bandeja
-  // se congelaría. Cada 20 s, si NO ha llegado ningún evento reciente, refetch
-  // de conversaciones y del hilo abierto. Es barato (GET idempotente) y solo
-  // pega a la BD cuando el SSE está realmente inactivo.
+  // Refresco en vivo de la bandeja. El SSE (/api/events) no es fiable detrás
+  // del proxy de Railway (Railway/Caddy no garantiza long-poll: la conexión se
+  // corta o amortigua sin que EventSource lo note), así que el polling es el
+  // mecanismo PRIMARIO, no un respaldo perezoso. Cada 6 s refetch de las
+  // conversaciones (para nuevos contactos/previews) y del hilo abierto (para
+  // los mensajes nuevos/estado). Es un GET idempotente y barato por 6 s, muy
+  // inferior al coste de dejar la bandeja congelada.
   useEffect(() => {
-    const id = setInterval(() => {
-      const idleMs = Date.now() - lastSseActivityRef.current;
-      // 45 s porque el SSE manda heartbeat cada 25 s: si no escuchamos nada en
-      // casi el doble, algo está mal.
-      if (idleMs > 45_000) {
-        void refetchConversations();
-        if (selectedIdRef.current) void refetchMessages(selectedIdRef.current);
-        setDetailRev((v) => v + 1);
+    let stopped = false;
+    let timeout: ReturnType<typeof setTimeout>;
+    async function tick() {
+      void refetchConversations();
+      const sel = selectedIdRef.current;
+      if (sel) await refetchMessages(sel);
+      if (!stopped) {
+        timeout = setTimeout(tick, 6_000);
       }
-    }, 20_000);
-    return () => clearInterval(id);
+    }
+    timeout = setTimeout(tick, 6_000);
+    return () => {
+      stopped = true;
+      clearTimeout(timeout);
+    };
   }, [refetchConversations, refetchMessages]);
 
   const selected = conversations?.find((c) => c.id === selectedId) ?? null;
