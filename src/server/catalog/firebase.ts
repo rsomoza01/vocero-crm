@@ -226,7 +226,8 @@ export async function searchProducts(
     .get();
 
   const exact: ProductDoc[] = [];
-  const fuzzy: { p: ProductDoc; score: number }[] = [];
+  const fuzzyAll: { p: ProductDoc; score: number }[] = [];
+  const fuzzyAny: { p: ProductDoc; score: number }[] = [];
   // Tokens de la consulta separados en DISTINTIVOS (el fármaco) y
   // NO-DISTINTIVOS (marca/sal). "FEXOFENADINA CLORHIDRATO CALOX" →
   // distintivos: [fexofenadina], no-distintivos: [clorhidrato, calox].
@@ -251,6 +252,21 @@ export async function searchProducts(
   const accesorios = termTokens.filter((t) => ACCESORIO.has(t) && !esNumero(t));
   // Tokens de fármaco = distintivos que NO son accesorios.
   const farmacos = distintivos.filter((t) => !ACCESORIO.has(t));
+  // CONSOLIDACIÓN de tokens contiguos: en el catálogo las marcas suelen venir
+  // pegadas ("ALPHAPRO 1 FORMULA...") pero el cliente las escribe separadas
+  // ("Alpha pro"). Sin unir los consecutivos, "alpha" y "pro" solo califican
+  // por OR y ganan productos que contienen UNA de las palabras (NAN OPTI PRO,
+  // DENY PRO) en vez del ALPHAPRO real. Se generan las uniones de pares
+  // consecutivos de los tokens de letras: ["alpha","pro"] → "alphapro".
+  const letrasTokens = termTokens.filter((t) => !esNumero(t));
+  const consolidados: string[] = [];
+  for (let i = 0; i + 1 < letrasTokens.length; i++) {
+    consolidados.push(letrasTokens[i]! + letrasTokens[i + 1]!);
+  }
+  // Tokens de letras que el producto DEBE contener (todos) para clasificar
+  // como coincidencia fuerte. Excluye marcas/sal (NO_DISTINTIVO) que solo
+  // puntúan, y las presentaciones genéricas ya filtradas.
+  const requeridos = letrasTokens.filter((t) => !NO_DISTINTIVO.has(t));
 
   for (const doc of snap.docs) {
     const p = mapProduct(doc.id, doc.data() as Record<string, unknown>);
@@ -258,8 +274,13 @@ export async function searchProducts(
     if (!hay) continue;
     const hayTokens = hay.split(/\s+/);
 
-    // Fase 1: exacto (substring o prefijo de token).
-    if (hay.includes(term) || hayTokens.some((t) => t.startsWith(term))) {
+    // Fase 1: exacto (substring completo, prefijo de token, o una marca
+    // consolidada de tokens contiguos: "alpha pro" → "alphapro").
+    if (
+      hay.includes(term) ||
+      hayTokens.some((t) => t.startsWith(term)) ||
+      consolidados.some((c) => c.length >= 4 && hay.includes(c))
+    ) {
       exact.push(p);
       continue;
     }
@@ -303,15 +324,39 @@ export async function searchProducts(
         score += 0.5;
       }
     }
-    fuzzy.push({ p, score });
+    // PRECISIÓN: contar cuántos de los tokens REQUERIDOS de la consulta
+    // aparecen en el producto. Una consulta multi-palabra ("Alpha pro") NO
+    // debe conformarse con que UNA palabra ("pro") aparezca: eso hacía que
+    // "Alpha pro 0-6" devolviera NAN OPTI PRO / DENY PRO en vez de ALPHAPRO.
+    // Los que contienen TODAS las palabras van en un grupo de mayor
+    // prioridad; los que contienen solo algunas, en un segundo grupo.
+    let matchedTokens = 0;
+    for (const qt of requeridos) {
+      const hit =
+        hay.includes(qt) ||
+        hayTokens.some((ht) => ht.length >= 3 && levenshtein(ht, qt, 1) <= 1);
+      if (hit) matchedTokens += 1;
+    }
+    const entry = { p, score };
+    if (requeridos.length > 1 && matchedTokens === requeridos.length) {
+      fuzzyAll.push(entry);
+    } else {
+      fuzzyAny.push(entry);
+    }
   }
 
   let out: ProductDoc[];
   if (exact.length) {
     out = exact;
-  } else if (fuzzy.length) {
-    fuzzy.sort((a, b) => b.score - a.score || (a.p.precio ?? Infinity) - (b.p.precio ?? Infinity));
-    out = fuzzy.map((f) => f.p);
+  } else if (fuzzyAll.length) {
+    // Todos los tokens distintivos matchean: máxima precisión.
+    fuzzyAll.sort((a, b) => b.score - a.score || (a.p.precio ?? Infinity) - (b.p.precio ?? Infinity));
+    out = fuzzyAll.map((f) => f.p);
+  } else if (fuzzyAny.length) {
+    // Solo algunos tokens matchean: se devuelven como respaldo, pero NUNCA
+    // por encima de los que matchean todo (por eso van en grupo aparte).
+    fuzzyAny.sort((a, b) => b.score - a.score || (a.p.precio ?? Infinity) - (b.p.precio ?? Infinity));
+    out = fuzzyAny.map((f) => f.p);
   } else {
     out = [];
   }
