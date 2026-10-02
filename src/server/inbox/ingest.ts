@@ -48,7 +48,17 @@ type MediaInput = {
   caption: string | null;
   payload: unknown;
   fetchStatus: "available" | "pending";
+  /**
+   * Ruta relativa dentro de MEDIA_DIR. Los adjuntos que llegan por Evolution GO
+   * traen el binario ya decodificado (campo raíz `base64`), así que el webhook
+   * lo escribe en el volumen ANTES de ingestar y lo pasa aquí: con
+   * `fetchStatus:"available"` + `storagePath` la Bandeja sirve el archivo sin
+   * tocar Graph/Meta (que no aplica a este canal).
+   */
+  storagePath?: string | null;
 };
+
+export type { MediaInput };
 
 /**
  * 008 — Extrae el adjunto de un mensaje del webhook (entrante o echo).
@@ -122,6 +132,7 @@ async function attachMediaAsset(
         caption: media.caption,
         payload: media.payload ?? null,
         fetchStatus: media.fetchStatus,
+        storagePath: media.storagePath ?? null,
       })
       .returning();
     const asset = inserted[0];

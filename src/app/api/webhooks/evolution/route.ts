@@ -25,6 +25,7 @@ import {
   getOrCreateConversation,
   ingestInboundMessage,
   serializeMessage,
+  type MediaInput,
 } from "@/server/inbox/ingest";
 import {
   getOrCreateContactByIdentity,
@@ -819,32 +820,11 @@ async function delegateToNea(input: {
   const env = getEnv();
   const baseUrl = env.NEA_AGENT_URL;
   const apiKey = env.BOT_API_KEY;
-  if (!baseUrl || !apiKey) {
-    console.warn("[evolution-webhook] nea-agent sin NEA_AGENT_URL/BOT_API_KEY — mensaje a bandeja");
-    await ingestInboundMessage({
-      organizationId: input.organizationId,
-      identity: input.identity,
-      waMessageId: input.waMessageId,
-      type: "text",
-      text: input.text,
-      timestamp: input.timestamp,
-      skipAgent: true,
-    });
-    return;
-  }
-  // Ingestar a la bandeja (para que el mensaje quede en el hilo) sin reenviar
-  // al agente interno (nea-agent lo procesa).
-  await ingestInboundMessage({
-    organizationId: input.organizationId,
-    identity: input.identity,
-    waMessageId: input.waMessageId,
-    type: "text",
-    text: input.text,
-    timestamp: input.timestamp,
-    skipAgent: true,
-  });
+
   // La imagen puede venir como base64 (data:...) o como URL http de Evolution.
   // Si es URL, descargarla con el header apikey y convertirla a base64.
+  // Se normaliza ANTES de persistir el adjunto: si llega como URL, el binario
+  // no está disponible hasta aquí.
   let imageBase64 = input.imageBase64 ?? "";
   if (imageBase64 && !imageBase64.startsWith("data:") && !/^[A-Za-z0-9+/=]+$/.test(imageBase64.slice(0, 100))) {
     try {
@@ -896,6 +876,35 @@ async function delegateToNea(input: {
     } catch (err) {
       console.warn(`[evolution-webhook] error descargando audio: ${err}`);
     }
+  }
+  // Persistir el adjunto y ingestarlo a la Bandeja ANTES de llamar a nea-agent.
+  // La Bandeja previsualiza desde `/api/media/{assetId}` y la ingesta solo crea
+  // el `media_asset` si recibe `media`. Antes esta rama ingestaba SIEMPRE
+  // `type:"text"` sin media, así que las imágenes/audios de TODOS los tenants de
+  // Evolution GO no se veían en la Bandeja aunque el agente sí las procesara.
+  // El binario llega ya decodificado por Evolution (campo raíz `base64`) o se
+  // descargó arriba: no se toca Graph/Meta.
+  const attachment = await persistInboundAttachment({
+    organizationId: input.organizationId,
+    waMessageId: input.waMessageId,
+    imageBase64,
+    imageMime: input.imageMime,
+    audioBase64,
+    audioMime: input.audioMime,
+  });
+  await ingestInboundMessage({
+    organizationId: input.organizationId,
+    identity: input.identity,
+    waMessageId: input.waMessageId,
+    type: attachment?.type ?? "text",
+    text: input.text,
+    timestamp: input.timestamp,
+    media: attachment?.media ?? null,
+    skipAgent: true,
+  });
+  if (!baseUrl || !apiKey) {
+    console.warn("[evolution-webhook] nea-agent sin NEA_AGENT_URL/BOT_API_KEY — mensaje a bandeja");
+    return;
   }
   // Llamar a nea-agent /chat con la imagen base64 (modo producción: send=true,
   // nea-agent resuelve la conversación por identidad y envía la respuesta vía
@@ -953,6 +962,86 @@ async function getInstanceToken(organizationId: string): Promise<string | null> 
     const creds = await getEvolutionCredentialsByOrg(organizationId);
     return creds?.instanceToken ?? null;
   } catch {
+    return null;
+  }
+}
+
+/**
+ * Persiste el adjunto entrante en el volumen y devuelve el `media` que la
+ * ingesta necesita para crear el `media_asset`.
+ *
+ * Por qué existe: la rama de farmacia (Evolution GO) delegaba a nea-agent
+ * ingestando SIEMPRE `type:"text"` y sin `media`, así que la Bandeja mostraba
+ * el mensaje como texto vacío y el adjunto no existía en `media_asset` — la UI
+ * solo previsualiza desde `/api/media/{assetId}` (message-thread.tsx). El
+ * binario YA viene decodificado por Evolution (campo raíz `base64`), por lo que
+ * no se toca Graph/Meta: se escribe directo con `saveMediaFile`.
+ *
+ * Devuelve null cuando no hay adjunto (texto puro) — la ingesta sigue igual.
+ */
+async function persistInboundAttachment(input: {
+  organizationId: string;
+  waMessageId: string;
+  imageBase64?: string;
+  imageMime?: string;
+  audioBase64?: string;
+  audioMime?: string;
+}): Promise<{ type: string; media: MediaInput } | null> {
+  const imageB64 = (input.imageBase64 ?? "").trim();
+  const audioB64 = (input.audioBase64 ?? "").trim();
+  if (!imageB64 && !audioB64) return null;
+
+  const isImage = Boolean(imageB64);
+  const raw = isImage ? imageB64 : audioB64;
+  // Acepta data:URI o base64 puro; una URL http NO es base64 (se descarta:
+  // el binario real ya viene en el campo raíz `base64` de Evolution).
+  const b64 = raw.startsWith("data:")
+    ? raw.slice(raw.indexOf(",") + 1)
+    : raw;
+  if (!/^[A-Za-z0-9+/=\s]+$/.test(b64.slice(0, 200))) {
+    console.warn("[evolution-webhook] adjunto no es base64 — no se persiste en la Bandeja");
+    return null;
+  }
+
+  let data: Buffer;
+  try {
+    data = Buffer.from(b64, "base64");
+  } catch {
+    return null;
+  }
+  if (!data.length) return null;
+
+  const kind = isImage ? "image" : "audio";
+  const mime = isImage
+    ? (input.imageMime || "image/jpeg")
+    : (input.audioMime || "audio/ogg");
+
+  try {
+    const { newId } = await import("@/lib/db/ids");
+    const assetId = newId("mediaAsset");
+    const { saveMediaFile } = await import("@/server/whatsapp/media");
+    await saveMediaFile(input.organizationId, assetId, data);
+    console.log(
+      `[evolution-webhook] adjunto persistido en la Bandeja: ${kind} ${data.length} bytes asset=${assetId}`
+    );
+    return {
+      type: kind,
+      // fetchStatus "available" + storagePath ya escrito: la ruta
+      // /api/media/{assetId} sirve el archivo del volumen sin tocar Graph;
+      // ensureAssetAvailable sale temprano porque el status es available.
+      media: {
+        kind,
+        waMediaId: input.waMessageId,
+        mimeType: mime,
+        fileName: null,
+        caption: null,
+        payload: null,
+        fetchStatus: "available",
+        storagePath: `${input.organizationId}/${assetId}`,
+      },
+    };
+  } catch (err) {
+    console.warn(`[evolution-webhook] no se pudo persistir el adjunto: ${err}`);
     return null;
   }
 }
