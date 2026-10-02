@@ -16,6 +16,7 @@ import {
   type ResolvedIdentity,
 } from "@/server/inbox/identity";
 import { applyStatusUpdate } from "@/server/inbox/status";
+import { esMensajeAutomatico } from "@/server/inbox/automaticos";
 import { onLeadActivity } from "@/server/inbox/lead-activity";
 import { maybeRunAgentTurn } from "@/server/ai/trigger";
 
@@ -343,6 +344,24 @@ async function ingestManualEcho(
     .update(schema.conversation)
     .set({ lastMessageAt: waTimestamp, updatedAt: new Date() })
     .where(eq(schema.conversation.id, conversation.id));
+
+  // MENSAJE AUTOMÁTICO de WhatsApp Business (bienvenida/ausencia/catálogo): se
+  // registra en el hilo pero NO pausa la IA — el dueño no escribió nada y pausar
+  // por una plantilla deja al agente mudo en cuanto el cliente dice "Hola".
+  if (esMensajeAutomatico(echo.text?.body ?? null)) {
+    console.log(
+      `[webhook] mensaje automático de WhatsApp Business en ${conversation.id} ` +
+        `— registrado SIN pausar la IA`
+    );
+    publish(organizationId, {
+      type: "message.new",
+      data: {
+        conversationId: conversation.id,
+        message: serializeMessage(message, asset),
+      },
+    });
+    return;
+  }
 
   // Pausa automática de la IA, idempotente y atómica (solo si no hay handoff).
   const paused = await db
