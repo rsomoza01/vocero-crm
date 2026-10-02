@@ -147,6 +147,67 @@ const SINONIMOS_PRESENTACION: Record<string, string> = {
   vial: "vial", viales: "vial",
 };
 
+/**
+ * Marcadores de presentación TAL COMO aparecen en el catálogo (en el nombre del
+ * producto). El cliente pide "tabletas" / "jarabe" y el catálogo escribe
+ * "TAB" / "JAB" / "JABE" / "COMP" / "SOB".
+ *
+ * OJO con `JAB`: significa **jarabe** en catálogos que usan "JAB X 120 ML"
+ * (jarabe con dosis por volumen, típico de un laboratorio venezolano) pero es
+ * **jabón** cuando va pegado a "ON" o con punto ("JABON", "JAB.YODADO"). Por eso
+ * los tokens se extraen del nombre con `tokensPresentacion()`, que normaliza el
+ * punto y descarta el sufijo "ON" de jabón. Sin esa desambiguación, pedir
+ * "jarabe" devolvería jabones y "tabletas" sería ruido puro.
+ */
+const MARCADOR_PRESENTACION: Record<string, string[]> = {
+  tableta: ["tab", "tabl", "tabla", "tableta", "tabletas", "comp", "compred",
+            "comprimido", "comprimidos", "grag", "gragea", "rec", "recubierto",
+            "blister"],
+  capsula: ["cap", "caps", "capsula", "capsulas", "cps"],
+  jarabe: ["jab", "jabe", "jbe", "jarabe", "jarabes"],
+  susp: ["susp", "suspension"],
+  sobre: ["sob", "sobre", "sobres", "sachet", "granulado"],
+  gotas: ["gota", "gotas", "gotero"],
+  crema: ["crema", "cremas", "unguento", "pomada", "gel", "locion", "loción"],
+  inyectable: ["amp", "ampolla", "ampollas", "vial", "viales", "inyect",
+               "inyectable"],
+};
+
+/**
+ * Presentaciones que NO son jarabe aunque declaren volumen. Un inyectable
+ * ("CLEXANE 20 MG / 0.2 ML X 2 AMP"), una crema o un champú llevan ml/cc pero
+ * jamás son el jarabe que pide un cliente.
+ */
+const NO_ES_JARABE = new Set([
+  "amp", "ampolla", "ampollas", "vial", "viales", "inyect", "inyectable",
+  "crema", "cremas", "unguento", "pomada", "gel", "locion", "jabon",
+  "shamp", "shampoo", "spray", "colirio", "ovulo", "ovulos", "supos",
+  "supositorio", "supositorios", "inhalacion", "inhalador", "aerosol",
+  "nasal", "oftalmica", "otica", "enema", "lavado",
+]);
+
+/**
+ * Tokens de presentación de un nombre, ya desambiguados. "TAB" → ["tab"],
+ * "JAB.X 120 ML" → ["jab"] (jarabe), "JABON" / "JAB.YODADO" → ["jabon"]
+ * (jabón, que NO es una forma farmacéutica de presentación).
+ */
+function tokensPresentacion(nombre: string): string[] {
+  const out: string[] = [];
+  for (const raw of normalize(nombre).split(/[\s.,/()-]+/)) {
+    // Quitar el punto pegado ("JAB.X" → "jabx", "JAB." → "jab").
+    const t = raw.replace(/[^a-z0-9]/g, "");
+    if (!t) continue;
+    // Desambiguar jabón: "jabon", "jabx", "jab.yodado" empiezan con jab pero no
+    // son jarabe. El jarabe real es "jab" solo o "jabe"/"jbe".
+    if (t.startsWith("jab") && t !== "jab" && t !== "jabe" && t !== "jbe") {
+      out.push("jabon");
+      continue;
+    }
+    out.push(t);
+  }
+  return out;
+}
+
 /** Distancia de Levenshtein con corte temprano (banded) para términos cortos. */
 function levenshtein(a: string, b: string, maxDist: number): number {
   if (a === b) return 0;
@@ -252,6 +313,66 @@ export async function searchProducts(
   const accesorios = termTokens.filter((t) => ACCESORIO.has(t) && !esNumero(t));
   // Tokens de fármaco = distintivos que NO son accesorios.
   const farmacos = distintivos.filter((t) => !ACCESORIO.has(t));
+
+  // PRESENTACIÓN pedida por el cliente: "tabletas", "jarabe", "capsulas",
+  // "sobre"... Se resuelve a la forma canónica vía SINONIMOS_PRESENTACION.
+  // Es un FILTRO DURO (no solo score): cuando el cliente pide una presentación,
+  // solo se devuelven productos con ESA forma — así, si un medicamento existe en
+  // tabletas Y en jarabe, pedir "tabletas" muestra únicamente la tableta.
+  // Si el filtro deja la lista vacía se cae al comportamiento normal (nunca
+  // esconder el medicamento por un marcador que el catálogo no usa).
+  const presionadas = new Set<string>();
+  for (const t of term.split(/\s+/)) {
+    const canon = SINONIMOS_PRESENTACION[t];
+    if (canon) presionadas.add(canon);
+  }
+  const quierePresentacion = presionadas.size > 0;
+  // Tokens de la consulta que son PRESENTACIÓN (tableta, jarabe, cap...). Nunca
+  // deben calificar un producto en la fase difusa: por Levenshtein "tab"≈"cap"
+  // y "jarabe"≈"jaraba" metían cápsulas/ruido en una consulta de tabletas.
+  const presentacionTokensQuery = new Set<string>();
+  for (const canon of presionadas) {
+    presentacionTokensQuery.add(canon);
+    for (const [k, v] of Object.entries(SINONIMOS_PRESENTACION)) {
+      if (v === canon) presentacionTokensQuery.add(k);
+    }
+    for (const m of MARCADOR_PRESENTACION[canon] ?? []) {
+      presentacionTokensQuery.add(m);
+    }
+  }
+  /**
+   * ¿El nombre del producto tiene la presentación pedida?
+   *
+   * Para "jarabe" se acepta además el criterio de VOLUMEN (ml/cc): muchos
+   * laboratorios NO escriben "JAB" y distinguen la tableta del jarabe solo por
+   * la unidad — "ATAMEL 500 MG X 20 TABLETAS" vs "ATAMEL 120 ML PED SABOR A
+   * TUTTI FRUTTI". Medido sobre el catálogo real: de 265 productos con ml, solo
+   * 1 (0.4%) llevaba además un marcador sólido, así que el volumen es una señal
+   * de líquido fiable; y se excluyen los que sí son sólidos o son inyectables/
+   * cremas/champús (NO_ES_JARABE), que llevan ml sin ser jarabe.
+   */
+  const tienePresentacion = (nombre: string): boolean => {
+    if (!quierePresentacion) return true;
+    const toks = tokensPresentacion(nombre);
+    const tokSet = new Set(toks);
+    for (const canon of presionadas) {
+      const marcadores = MARCADOR_PRESENTACION[canon];
+      if (!marcadores) continue;
+      if (toks.some((t) => marcadores.includes(t))) return true;
+      if (canon === "jarabe") {
+        const esLiquido = tokSet.has("ml") || tokSet.has("cc") || tokSet.has("lt");
+        const esSolido = MARCADOR_PRESENTACION.tableta!.some((m) => tokSet.has(m)) ||
+                         MARCADOR_PRESENTACION.capsula!.some((m) => tokSet.has(m));
+        const excluido = toks.some((t) => NO_ES_JARABE.has(t));
+        if (esLiquido && !esSolido && !excluido) return true;
+      }
+    }
+    return false;
+  };
+  // Un producto SIN ningún marcador de presentación sigue siendo candidato
+  // cuando el filtro estricto no encuentre nada (muchos catálogos no marcan la
+  // forma en el título); para eso se acumulan aquí los que sí la tienen.
+  const conPresentacion: ProductDoc[] = [];
   // CONSOLIDACIÓN de tokens contiguos: en el catálogo las marcas suelen venir
   // pegadas ("ALPHAPRO 1 FORMULA...") pero el cliente las escribe separadas
   // ("Alpha pro"). Sin unir los consecutivos, "alpha" y "pro" solo califican
@@ -281,7 +402,11 @@ export async function searchProducts(
       hayTokens.some((t) => t.startsWith(term)) ||
       consolidados.some((c) => c.length >= 4 && hay.includes(c))
     ) {
-      exact.push(p);
+      // Filtro de presentación: si el cliente pidió una forma concreta, un
+      // producto que no la tiene NO entra como exacto (irá a `conPresentacion`
+      // como respaldo solo si no hay ninguno que sí la tenga).
+      if (tienePresentacion(p.nombre)) exact.push(p);
+      else conPresentacion.push(p);
       continue;
     }
 
@@ -289,7 +414,11 @@ export async function searchProducts(
     // Si la consulta trae un token de FÁRMACO (no-accesorio), SOLO los
     // fármacos califican; los accesorios suman score pero no califican.
     // Si la consulta es solo de accesorios, estos califican.
-    const calificadores = farmacos.length > 0 ? farmacos : accesorios;
+    // PRESENTACIÓN: nunca califica un producto. "esoz tab" debe matchear
+    // productos por "esoz", no por "tab" (que por Levenshtein de 1 letra
+    // matchea "cap" y devolvía ESOZ cápsulas cuando se pidió tableta).
+    const calificadores = (farmacos.length > 0 ? farmacos : accesorios)
+      .filter((t) => !presentacionTokensQuery.has(t));
     if (calificadores.length === 0) continue;
     let score = 0;
     let matchedDistintivo = false;
@@ -339,9 +468,11 @@ export async function searchProducts(
     }
     const entry = { p, score };
     if (requeridos.length > 1 && matchedTokens === requeridos.length) {
-      fuzzyAll.push(entry);
+      if (tienePresentacion(p.nombre)) fuzzyAll.push(entry);
+      else conPresentacion.push(p);
     } else {
-      fuzzyAny.push(entry);
+      if (tienePresentacion(p.nombre)) fuzzyAny.push(entry);
+      else conPresentacion.push(p);
     }
   }
 
@@ -357,6 +488,12 @@ export async function searchProducts(
     // por encima de los que matchean todo (por eso van en grupo aparte).
     fuzzyAny.sort((a, b) => b.score - a.score || (a.p.precio ?? Infinity) - (b.p.precio ?? Infinity));
     out = fuzzyAny.map((f) => f.p);
+  } else if (conPresentacion.length) {
+    // El cliente pidió una presentación concreta (tabletas/jarabe/...) y NINGÚN
+    // producto del match la declara en el título. Antes de responder "no hay",
+    // se devuelven los que matchearon el fármaco — nunca esconder el
+    // medicamento por un marcador que el catálogo no usa.
+    out = conPresentacion;
   } else {
     out = [];
   }
