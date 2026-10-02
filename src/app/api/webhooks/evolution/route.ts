@@ -1020,6 +1020,10 @@ async function persistInboundAttachment(input: {
     const { newId } = await import("@/lib/db/ids");
     const assetId = newId("mediaAsset");
     const { saveMediaFile } = await import("@/server/whatsapp/media");
+    // El archivo se guarda con el MISMO id que la fila de media_asset: la ruta
+    // /api/media/{assetId} hace readMediaFile(org, assetId) y busca exactamente
+    // ese segmento en el volumen. Guardarlo con otro id deja la fila apuntando a
+    // un archivo inexistente (410 al previsualizar).
     await saveMediaFile(input.organizationId, assetId, data);
     console.log(
       `[evolution-webhook] adjunto persistido en la Bandeja: ${kind} ${data.length} bytes asset=${assetId}`
@@ -1038,6 +1042,7 @@ async function persistInboundAttachment(input: {
         payload: null,
         fetchStatus: "available",
         storagePath: `${input.organizationId}/${assetId}`,
+        assetId,
       },
     };
   } catch (err) {

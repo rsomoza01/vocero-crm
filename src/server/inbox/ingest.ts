@@ -56,6 +56,13 @@ type MediaInput = {
    * tocar Graph/Meta (que no aplica a este canal).
    */
   storagePath?: string | null;
+  /**
+   * Id ya generado por el llamador. El webhook lo necesita porque escribe el
+   * archivo en el volumen usando ESE id (`/api/media/{assetId}` hace
+   * `readMediaFile(org, assetId)`): la fila debe nacer con el mismo id o el
+   * archivo queda inalcanzable. Si falta, la ingesta genera uno nuevo.
+   */
+  assetId?: string;
 };
 
 export type { MediaInput };
@@ -123,7 +130,10 @@ async function attachMediaAsset(
     const inserted = await db
       .insert(schema.mediaAsset)
       .values({
-        id: newId("mediaAsset"),
+        // Si el llamador ya escribió el archivo en el volumen con un id (rama de
+        // Evolution GO), la fila debe usar ESE id: `/api/media/{assetId}` busca
+        // el archivo por el id de la fila.
+        id: media.assetId ?? newId("mediaAsset"),
         organizationId,
         kind: media.kind,
         waMediaId: media.waMediaId,
