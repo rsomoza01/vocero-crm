@@ -1043,6 +1043,7 @@ async function persistInboundAttachment(input: {
         fetchStatus: "available",
         storagePath: `${input.organizationId}/${assetId}`,
         assetId,
+        fileSize: data.length,
       },
     };
   } catch (err) {

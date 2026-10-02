@@ -63,6 +63,8 @@ type MediaInput = {
    * archivo queda inalcanzable. Si falta, la ingesta genera uno nuevo.
    */
   assetId?: string;
+  /** Tamaño del binario ya escrito en el volumen (la UI lo muestra). */
+  fileSize?: number | null;
 };
 
 export type { MediaInput };
@@ -143,6 +145,7 @@ async function attachMediaAsset(
         payload: media.payload ?? null,
         fetchStatus: media.fetchStatus,
         storagePath: media.storagePath ?? null,
+        fileSize: media.fileSize ?? null,
       })
       .returning();
     const asset = inserted[0];
