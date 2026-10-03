@@ -37,10 +37,16 @@ export async function getBrandingContext(
         .from(schema.organization)
         .where(eq(schema.organization.id, organizationId))
         .limit(1)
-    : // Sin sesión (login, layout raíz): la única organización de la instancia.
+    : // Sin sesión (login, layout raíz): marca de la instancia. Se ordena por id
+      // para que sea DETERMINISTA — un LIMIT 1 sin ORDER BY devolvía una fila
+      // arbitraria según el plan del planner, así que la marca que se veía en el
+      // login cambiaba entre consultas y, al guardar sin sesión, se escribía en
+      // una organización cualquiera (origen del "Gentefarma" replicado en varios
+      // tenants, que no es el nombre de ninguno).
       await db
         .select({ id: schema.organization.id, metadata: schema.organization.metadata })
         .from(schema.organization)
+        .orderBy(schema.organization.id)
         .limit(1);
   if (!rows[0]) return { organizationId: null, branding: DEFAULT_BRANDING };
   const meta = parseMetadata(rows[0].metadata);
