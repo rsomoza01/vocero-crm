@@ -522,9 +522,15 @@ export async function getProviderInfo(
     const doc = await store.collection(env.FIREBASE_COLLECTION_PROVIDERS).doc(providerId).get();
     if (!doc.exists) return null;
     const d = doc.data() as Record<string, unknown>;
+    // El horario es un campo de texto libre que el dueño edita en el SAAS y NO
+    // todos los tenants lo escribieron en el mismo campo: la mayoría usa
+    // `hours` (17 de 18 providers) pero algunos usan `horario` (p. ej. 11 y 12).
+    // Leer solo `hours` dejaba esos tenants sin horario y el agente respondía
+    // "no pude obtener la información del horario".
+    const horas = d.hours ?? d.horario ?? d.horarioAtencion ?? d.Hours;
     return {
       name: String(d.name ?? d.Name ?? d.nombre ?? ""),
-      hours: d.hours ? String(d.hours) : null,
+      hours: horas ? String(horas).replace(/\\n/g, "\n").trim() : null,
       address: d.address ? String(d.address) : null,
       // Formas de pago (markdown libre que el dueño edita en el SAAS):
       // campo `paymenType` en providers/{id} de Firestore.
