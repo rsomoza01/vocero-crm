@@ -20,6 +20,11 @@ const envSchema = z.object({
     }),
   META_WEBHOOK_VERIFY_TOKEN: z.string().min(8),
   META_APP_SECRET: z.string().optional(),
+  // Nombre NEUTRO de la instancia, para las pantallas que se ven ANTES de
+  // autenticar (el login). Sin esto caían al branding de una organización
+  // arbitraria (un `LIMIT 1`), así que el login mostraba el nombre de una
+  // farmacia concreta en vez de la marca del servicio.
+  INSTANCE_BRAND_NAME: z.string().min(1).default("Gentefarma"),
   META_GRAPH_API_VERSION: z.string().default("v25.0"),
   META_GRAPH_BASE_URL: z.string().url().default("https://graph.facebook.com"),
   // Canal de WhatsApp: "meta" (Cloud API) o "evolution" (Evolution GO/API).

@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
+import { getEnv } from "@/lib/env";
 import {
   DEFAULT_BRANDING,
   normalizeBranding,
@@ -61,7 +62,31 @@ export async function getBrandingContext(
 export async function getBranding(
   organizationId?: string | null
 ): Promise<Branding> {
+  // Sin organización (login, layout raíz antes de autenticar) NO se cae al
+  // `LIMIT 1` de una org arbitraria: se devuelve la marca NEUTRA de la
+  // instancia. Así el login muestra el nombre del servicio y no el de una
+  // farmacia concreta (que además cambiaba entre consultas por el orden del
+  // planner al no llevar ORDER BY).
+  if (!organizationId) return brandingDeInstancia();
   return (await getBrandingContext(organizationId)).branding;
+}
+
+/**
+ * Marca NEUTRA de la instancia, para pantallas sin sesión (login).
+ *
+ * Toma el nombre de `INSTANCE_BRAND_NAME` (env) y el acento del branding de la
+ * primera organización —el aspecto visual del producto— pero SIN el nombre de
+ * ningún tenant. El favicon neutro se genera con la inicial del nombre.
+ */
+export function brandingDeInstancia(): Branding {
+  let nombre = DEFAULT_BRANDING.name;
+  try {
+    const env = getEnv();
+    if (env.INSTANCE_BRAND_NAME?.trim()) nombre = env.INSTANCE_BRAND_NAME.trim();
+  } catch {
+    // En build no hay entorno: se queda el default.
+  }
+  return { ...DEFAULT_BRANDING, name: nombre.slice(0, 30) };
 }
 
 export async function saveBranding(
