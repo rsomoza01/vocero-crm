@@ -341,6 +341,53 @@ export async function searchProducts(
     }
   }
   /**
+   * DOSIS pedida por el cliente: número + unidad ("40 mg", "500 mg", "120 ml").
+   *
+   * Es un FILTRO DURO, igual que la presentación: si el cliente/la receta pide
+   * una dosis, solo se devuelven los productos con ESA dosis. Sin esto la fase
+   * difusa EXCLUYE los números de los tokens (a propósito: "300" por Levenshtein
+   * matchea "500"/"100" e inundaría de irrelevantes), así que la dosis quedaba
+   * sin filtrar y una consulta de "omeprazol 40 mg" mezclaba 20 mg y 40 mg en la
+   * misma lista — reportado con la receta "ESOZ 40 MG".
+   *
+   * Se compara NÚMERO + UNIDAD: "40 mg" no debe aceptar "40 ml" (jarabe vs
+   * tableta son presentaciones distintas).
+   */
+  const dosisPedidas = new Set<string>();
+  for (const m of term.matchAll(/(\d+(?:[.,]\d+)?)\s*(mg|mcg|gr|g|ml|cc|ui|ui\.|u\.i\.)/g)) {
+    dosisPedidas.add(`${m[1]!.replace(",", ".")}${m[2]!.replace(/\./g, "")}`);
+  }
+  const quiereDosis = dosisPedidas.size > 0;
+  const unidadesDosis = ["mg", "mcg", "gr", "g", "ml", "cc", "ui"];
+  /**
+   * ¿El nombre del producto declara alguna de las dosis pedidas?
+   *
+   * Devuelve true cuando NO se pidió dosis (el filtro no aplica). Cuando sí se
+   * pidió y el producto no la declara, va al grupo de respaldo — igual que la
+   * presentación: NUNCA se esconde el medicamento por un dato que el título
+   * pueda no traer.
+   */
+  const tieneDosis = (nombre: string): boolean => {
+    if (!quiereDosis) return true;
+    const n = normalize(nombre);
+    for (const m of n.matchAll(/(\d+(?:[.,]\d+)?)\s*([a-z.]+)/g)) {
+      const num = m[1]!.replace(",", ".");
+      const unidad = m[2]!.replace(/\./g, "");
+      const unidadCanon = unidadesDosis.includes(unidad)
+        ? (unidad === "gr" ? "g" : unidad)
+        : null;
+      if (!unidadCanon) continue;
+      // Se aceptan ambas formas: "40mg" pegado y "40 mg" separado.
+      const clave = `${num}${unidadCanon}`;
+      const clavePegada = `${num}${unidad}`;
+      if (dosisPedidas.has(clave) || dosisPedidas.has(clavePegada)) return true;
+    }
+    return false;
+  };
+  /** Filtros DUROS (no de score): presentación + dosis. Si no cumple, el
+   *  producto solo se usa como respaldo cuando no hay ningún candidato que sí.
+   *  Se declara DESPUÉS de `tienePresentacion` (ambas son const arrow). */
+  /**
    * ¿El nombre del producto tiene la presentación pedida?
    *
    * Para "jarabe" se acepta además el criterio de VOLUMEN (ml/cc): muchos
@@ -389,6 +436,9 @@ export async function searchProducts(
   // puntúan, y las presentaciones genéricas ya filtradas.
   const requeridos = letrasTokens.filter((t) => !NO_DISTINTIVO.has(t));
 
+  const cumpleFiltros = (nombre: string): boolean =>
+    tienePresentacion(nombre) && tieneDosis(nombre);
+
   for (const doc of snap.docs) {
     const p = mapProduct(doc.id, doc.data() as Record<string, unknown>);
     const hay = normalize(p.nombre);
@@ -405,7 +455,7 @@ export async function searchProducts(
       // Filtro de presentación: si el cliente pidió una forma concreta, un
       // producto que no la tiene NO entra como exacto (irá a `conPresentacion`
       // como respaldo solo si no hay ninguno que sí la tenga).
-      if (tienePresentacion(p.nombre)) exact.push(p);
+      if (cumpleFiltros(p.nombre)) exact.push(p);
       else conPresentacion.push(p);
       continue;
     }
@@ -468,10 +518,10 @@ export async function searchProducts(
     }
     const entry = { p, score };
     if (requeridos.length > 1 && matchedTokens === requeridos.length) {
-      if (tienePresentacion(p.nombre)) fuzzyAll.push(entry);
+      if (cumpleFiltros(p.nombre)) fuzzyAll.push(entry);
       else conPresentacion.push(p);
     } else {
-      if (tienePresentacion(p.nombre)) fuzzyAny.push(entry);
+      if (cumpleFiltros(p.nombre)) fuzzyAny.push(entry);
       else conPresentacion.push(p);
     }
   }
