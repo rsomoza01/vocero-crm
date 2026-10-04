@@ -447,8 +447,23 @@ export async function searchProducts(
 
     // Fase 1: exacto (substring completo, prefijo de token, o una marca
     // consolidada de tokens contiguos: "alpha pro" → "alphapro").
+    //
+    // GUARD: un término CORTO no debe matchear dentro de una palabra MÁS LARGA.
+    // `hay.includes(term)` a secas hace que "foto" matchee "FOTORRETIN" (un
+    // oftálmico): el cliente mandaba la foto de unos óvulos vaginales, el agente
+    // buscaba con la palabra "foto" de su propia pregunta, y el catálogo devolvía
+    // GOTAS OFTALMICA (FOTORRETIN) — respondiendo "sí, tengo el producto de la
+    // foto" con un producto que no era. Caso real provider 19 (2026-10).
+    // Se exige que el término sea palabra completa (o prefijo de token, que ya
+    // se comprueba aparte) cuando es corto y cabe dentro de otro token.
+    const termEsPalabraCompleta =
+      hayTokens.includes(term) ||
+      ` ${hay} `.includes(` ${term} `);
+    const substringSeguro =
+      hay.includes(term) &&
+      (term.length >= 6 || termEsPalabraCompleta);
     if (
-      hay.includes(term) ||
+      substringSeguro ||
       hayTokens.some((t) => t.startsWith(term)) ||
       consolidados.some((c) => c.length >= 4 && hay.includes(c))
     ) {
