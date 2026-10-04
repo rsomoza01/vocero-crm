@@ -280,11 +280,32 @@ export async function searchProducts(
   if (!store) return [];
   const term = normalize(q);
   const tasa = await tasaBcv();
-  const snap = await store
+  // El campo `ProviderId` NO está tipado igual en todos los tenants: la mayoría
+  // lo guarda como STRING ('05'), pero algunos lo tienen como NÚMERO (11). Una
+  // query con `==` exige el MISMO tipo, así que al provider 11 su catálogo
+  // (600 productos reales en Firestore) le devolvía 0 resultados y el agente
+  // respondía "no disponible" para todo. Solo si la consulta de texto vuelve
+  // vacía se reintenta con el tipo numérico (evita duplicar queries en el caso
+  // normal, que es el 99% del tráfico).
+  let snap = await store
     .collection(getEnv().FIREBASE_COLLECTION_PRODUCTS)
     .where("ProviderId", "==", providerId)
     .limit(5000)
     .get();
+  if (snap.empty && /^\d+$/.test(providerId)) {
+    const snapNum = await store
+      .collection(getEnv().FIREBASE_COLLECTION_PRODUCTS)
+      .where("ProviderId", "==", Number(providerId))
+      .limit(5000)
+      .get();
+    if (!snapNum.empty) {
+      console.warn(
+        `[catalog] ProviderId "${providerId}" guardado como NÚMERO en Firestore ` +
+          `(${snapNum.size} productos). Revisar el import de ese tenant.`
+      );
+      snap = snapNum;
+    }
+  }
 
   const exact: ProductDoc[] = [];
   const fuzzyAll: { p: ProductDoc; score: number }[] = [];
