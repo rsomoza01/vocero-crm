@@ -22,6 +22,7 @@ import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { publish } from "@/server/events/bus";
 import {
+  attachMediaAsset,
   getOrCreateConversation,
   ingestInboundMessage,
   serializeMessage,
@@ -424,15 +425,35 @@ export async function POST(req: Request) {
             );
             return;
           }
+          // El dueño también manda FOTOS a mano desde su celular. Antes el echo se
+          // guardaba siempre como texto, así que esas fotos quedaban como burbujas
+          // VACÍAS en la Bandeja (39 en el tenant 27, todas origin=manual). Se
+          // persiste el adjunto y se liga al mensaje, igual que en la vía entrante.
+          // `rawMessage` aún no está declarado en este punto (se define más abajo,
+          // para la vía entrante), así que se resuelve aquí desde `data`.
+          const echoMsg = path(data, "Message") ?? path(data, "message");
+          const echoImage = extractImage(echoMsg as Record<string, unknown> | undefined);
+          let echoAttachment: { type: string; media: MediaInput } | null = null;
+          if (echoImage) {
+            echoAttachment = await persistInboundAttachment({
+              organizationId: orgId,
+              waMessageId: String(messageId),
+              imageBase64: echoImage.base64,
+              imageMime: echoImage.mime,
+            });
+          }
           console.log(
-            `[evolution-webhook] echo del dueño → ${recipient} msg=${messageId} text=${text ? JSON.stringify(text.slice(0, 60)) : "null"}`
+            `[evolution-webhook] echo del dueño → ${recipient} msg=${messageId} ` +
+              `adjunto=${echoAttachment?.type ?? "ninguno"} ` +
+              `text=${text ? JSON.stringify(text.slice(0, 60)) : "null"}`
           );
           await ingestManualEcho({
             organizationId: orgId,
             recipient,
-            waMessageId: messageId,
+            waMessageId: String(messageId),
             text,
             timestamp: extractTimestamp(data),
+            attachment: echoAttachment,
           });
           return;
         }
@@ -712,6 +733,8 @@ async function ingestManualEcho(input: {
   waMessageId: string;
   text: string | null;
   timestamp: string;
+  /** Adjunto del echo (una FOTO enviada a mano desde el celular del dueño). */
+  attachment?: { type: string; media: MediaInput } | null;
 }): Promise<void> {
   const db = getDb();
   const rawRecipient = input.recipient;
@@ -742,7 +765,12 @@ async function ingestManualEcho(input: {
       conversationId: conversation.id,
       waMessageId: input.waMessageId,
       direction: "out",
-      type: "text",
+      // El tipo sale del ADJUNTO cuando lo hay. Antes estaba fijo en "text": si el
+      // dueño mandaba una FOTO a mano desde su celular, el echo se registraba como
+      // texto con `text: null` y la Bandeja mostraba una BURBUJA VACÍA (ni la
+      // imagen ni un aviso). Medido en el tenant 27: 39 mensajes así, todos
+      // `origin=manual`, invisibles para quien los leyera.
+      type: input.attachment?.type ?? "text",
       text: input.text,
       status: "sent",
       origin: "manual",
@@ -752,6 +780,17 @@ async function ingestManualEcho(input: {
     .returning();
   const message = inserted[0];
   if (!message) return; // duplicado
+
+  // El adjunto del echo se persiste y se LIGA al mensaje. Sin esto la fila nace
+  // con type="image" pero sin media_asset_id: la Bandeja muestra el clip genérico
+  // en vez de la foto (mismo síntoma que antes, un paso más adelante).
+  if (input.attachment?.media) {
+    await attachMediaAsset(
+      input.organizationId,
+      message.id,
+      input.attachment.media
+    );
+  }
 
   // Solo lastMessageAt: un mensaje del negocio NUNCA abre la ventana de 24 h.
   await db

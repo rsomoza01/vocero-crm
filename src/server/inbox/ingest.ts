@@ -122,8 +122,12 @@ export function mediaInputFrom(msg: WebhookMessage): MediaInput | null {
 /**
  * Crea el media_asset de un mensaje recién insertado y dispara la descarga en
  * segundo plano si hay binario. Jamás lanza hacia el webhook (FR-013).
+ *
+ * Exportada porque el ECHO del dueño (webhook/evolution, un mensaje SALIENTE con
+ * una foto enviada a mano desde el celular) necesita el mismo enganche: sin él la
+ * fila nace con type="image" pero sin asset y la Bandeja pinta el clip genérico.
  */
-async function attachMediaAsset(
+export async function attachMediaAsset(
   organizationId: string,
   messageId: string,
   media: MediaInput
