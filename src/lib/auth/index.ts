@@ -40,11 +40,36 @@ function isInternalSignup(): boolean {
 
 const RATE_LIMITED_PATHS = new Set(["/sign-in/email", "/sign-up/email"]);
 
+/**
+ * Orígenes aceptados además del `baseURL`.
+ *
+ * Better Auth rechaza el login con `403 INVALID_ORIGIN` si el `Origin` del
+ * navegador no coincide con `baseURL` (`APP_BASE_URL`). Cuando el dominio público
+ * cambia —p. ej. al empezar a usar `crm.gentefarma.com` en vez del
+ * `*.up.railway.app`—, sin esta lista el dueño NO puede entrar aunque su
+ * contraseña sea correcta: el CRM responde `Invalid origin`.
+ *
+ * `SSO_ALLOWED_ORIGIN` ya lista los orígenes del SAAS; aquí se añaden el dominio
+ * propio y el host de Railway que sirve la app (Railway inyecta
+ * `RAILWAY_PUBLIC_DOMAIN`), así el login funciona por cualquiera de los dos.
+ */
+function trustedOrigins(env: ReturnType<typeof getEnv>): string[] {
+  const out = new Set<string>([env.APP_BASE_URL]);
+  for (const bruto of (env.SSO_ALLOWED_ORIGIN ?? "").split(",")) {
+    const o = bruto.trim();
+    if (o) out.add(o);
+  }
+  const publico = process.env.RAILWAY_PUBLIC_DOMAIN?.trim();
+  if (publico) out.add(`https://${publico.replace(/^https?:\/\//, "")}`);
+  return [...out];
+}
+
 function createAuth() {
   const env = getEnv();
   return betterAuth({
     baseURL: env.APP_BASE_URL,
     secret: env.BETTER_AUTH_SECRET,
+    trustedOrigins: trustedOrigins(env),
     database: drizzleAdapter(getDb(), {
       provider: "pg",
       schema: {

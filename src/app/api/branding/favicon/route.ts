@@ -1,5 +1,5 @@
 import { readMediaFile } from "@/server/whatsapp/media";
-import { getBrandingContext } from "@/server/branding";
+import { getBrandingContext, brandingDeInstancia } from "@/server/branding";
 import { getSessionOrNull } from "@/lib/auth/session";
 import { DEFAULT_BRANDING } from "@/lib/branding";
 import { FAVICON_ASSET, generatedFaviconSvg } from "@/lib/favicon";
@@ -42,7 +42,11 @@ export async function GET(req: Request) {
   // branding genérico de la instancia.
   const org = (await getSessionOrNull())?.organizationId ?? null;
   const ctx = await getBrandingContext(org).catch(() => null);
-  const branding = ctx?.branding ?? DEFAULT_BRANDING;
+  // Sin sesión (login) NO se usa el nombre de una organización arbitraria: se
+  // genera el icono con la marca NEUTRA de la instancia.
+  const branding = org
+    ? (ctx?.branding ?? DEFAULT_BRANDING)
+    : brandingDeInstancia();
 
   if (org && ctx?.organizationId && branding.favicon) {
     try {

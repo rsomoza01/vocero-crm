@@ -16,6 +16,7 @@ import {
   type ResolvedIdentity,
 } from "@/server/inbox/identity";
 import { applyStatusUpdate } from "@/server/inbox/status";
+import { esMensajeAutomatico } from "@/server/inbox/automaticos";
 import { onLeadActivity } from "@/server/inbox/lead-activity";
 import { maybeRunAgentTurn } from "@/server/ai/trigger";
 
@@ -48,7 +49,26 @@ type MediaInput = {
   caption: string | null;
   payload: unknown;
   fetchStatus: "available" | "pending";
+  /**
+   * Ruta relativa dentro de MEDIA_DIR. Los adjuntos que llegan por Evolution GO
+   * traen el binario ya decodificado (campo raíz `base64`), así que el webhook
+   * lo escribe en el volumen ANTES de ingestar y lo pasa aquí: con
+   * `fetchStatus:"available"` + `storagePath` la Bandeja sirve el archivo sin
+   * tocar Graph/Meta (que no aplica a este canal).
+   */
+  storagePath?: string | null;
+  /**
+   * Id ya generado por el llamador. El webhook lo necesita porque escribe el
+   * archivo en el volumen usando ESE id (`/api/media/{assetId}` hace
+   * `readMediaFile(org, assetId)`): la fila debe nacer con el mismo id o el
+   * archivo queda inalcanzable. Si falta, la ingesta genera uno nuevo.
+   */
+  assetId?: string;
+  /** Tamaño del binario ya escrito en el volumen (la UI lo muestra). */
+  fileSize?: number | null;
 };
+
+export type { MediaInput };
 
 /**
  * 008 — Extrae el adjunto de un mensaje del webhook (entrante o echo).
@@ -102,8 +122,12 @@ export function mediaInputFrom(msg: WebhookMessage): MediaInput | null {
 /**
  * Crea el media_asset de un mensaje recién insertado y dispara la descarga en
  * segundo plano si hay binario. Jamás lanza hacia el webhook (FR-013).
+ *
+ * Exportada porque el ECHO del dueño (webhook/evolution, un mensaje SALIENTE con
+ * una foto enviada a mano desde el celular) necesita el mismo enganche: sin él la
+ * fila nace con type="image" pero sin asset y la Bandeja pinta el clip genérico.
  */
-async function attachMediaAsset(
+export async function attachMediaAsset(
   organizationId: string,
   messageId: string,
   media: MediaInput
@@ -113,7 +137,10 @@ async function attachMediaAsset(
     const inserted = await db
       .insert(schema.mediaAsset)
       .values({
-        id: newId("mediaAsset"),
+        // Si el llamador ya escribió el archivo en el volumen con un id (rama de
+        // Evolution GO), la fila debe usar ESE id: `/api/media/{assetId}` busca
+        // el archivo por el id de la fila.
+        id: media.assetId ?? newId("mediaAsset"),
         organizationId,
         kind: media.kind,
         waMediaId: media.waMediaId,
@@ -122,6 +149,8 @@ async function attachMediaAsset(
         caption: media.caption,
         payload: media.payload ?? null,
         fetchStatus: media.fetchStatus,
+        storagePath: media.storagePath ?? null,
+        fileSize: media.fileSize ?? null,
       })
       .returning();
     const asset = inserted[0];
@@ -319,6 +348,24 @@ async function ingestManualEcho(
     .update(schema.conversation)
     .set({ lastMessageAt: waTimestamp, updatedAt: new Date() })
     .where(eq(schema.conversation.id, conversation.id));
+
+  // MENSAJE AUTOMÁTICO de WhatsApp Business (bienvenida/ausencia/catálogo): se
+  // registra en el hilo pero NO pausa la IA — el dueño no escribió nada y pausar
+  // por una plantilla deja al agente mudo en cuanto el cliente dice "Hola".
+  if (esMensajeAutomatico(echo.text?.body ?? null)) {
+    console.log(
+      `[webhook] mensaje automático de WhatsApp Business en ${conversation.id} ` +
+        `— registrado SIN pausar la IA`
+    );
+    publish(organizationId, {
+      type: "message.new",
+      data: {
+        conversationId: conversation.id,
+        message: serializeMessage(message, asset),
+      },
+    });
+    return;
+  }
 
   // Pausa automática de la IA, idempotente y atómica (solo si no hay handoff).
   const paused = await db

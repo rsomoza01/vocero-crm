@@ -22,10 +22,13 @@ import { getDb, schema } from "@/lib/db";
 import { newId } from "@/lib/db/ids";
 import { publish } from "@/server/events/bus";
 import {
+  attachMediaAsset,
   getOrCreateConversation,
   ingestInboundMessage,
   serializeMessage,
+  type MediaInput,
 } from "@/server/inbox/ingest";
+import { esMensajeAutomatico } from "@/server/inbox/automaticos";
 import {
   getOrCreateContactByIdentity,
   type ResolvedIdentity,
@@ -422,15 +425,35 @@ export async function POST(req: Request) {
             );
             return;
           }
+          // El dueño también manda FOTOS a mano desde su celular. Antes el echo se
+          // guardaba siempre como texto, así que esas fotos quedaban como burbujas
+          // VACÍAS en la Bandeja (39 en el tenant 27, todas origin=manual). Se
+          // persiste el adjunto y se liga al mensaje, igual que en la vía entrante.
+          // `rawMessage` aún no está declarado en este punto (se define más abajo,
+          // para la vía entrante), así que se resuelve aquí desde `data`.
+          const echoMsg = path(data, "Message") ?? path(data, "message");
+          const echoImage = extractImage(echoMsg as Record<string, unknown> | undefined);
+          let echoAttachment: { type: string; media: MediaInput } | null = null;
+          if (echoImage) {
+            echoAttachment = await persistInboundAttachment({
+              organizationId: orgId,
+              waMessageId: String(messageId),
+              imageBase64: echoImage.base64,
+              imageMime: echoImage.mime,
+            });
+          }
           console.log(
-            `[evolution-webhook] echo del dueño → ${recipient} msg=${messageId} text=${text ? JSON.stringify(text.slice(0, 60)) : "null"}`
+            `[evolution-webhook] echo del dueño → ${recipient} msg=${messageId} ` +
+              `adjunto=${echoAttachment?.type ?? "ninguno"} ` +
+              `text=${text ? JSON.stringify(text.slice(0, 60)) : "null"}`
           );
           await ingestManualEcho({
             organizationId: orgId,
             recipient,
-            waMessageId: messageId,
+            waMessageId: String(messageId),
             text,
             timestamp: extractTimestamp(data),
+            attachment: echoAttachment,
           });
           return;
         }
@@ -710,6 +733,8 @@ async function ingestManualEcho(input: {
   waMessageId: string;
   text: string | null;
   timestamp: string;
+  /** Adjunto del echo (una FOTO enviada a mano desde el celular del dueño). */
+  attachment?: { type: string; media: MediaInput } | null;
 }): Promise<void> {
   const db = getDb();
   const rawRecipient = input.recipient;
@@ -740,7 +765,12 @@ async function ingestManualEcho(input: {
       conversationId: conversation.id,
       waMessageId: input.waMessageId,
       direction: "out",
-      type: "text",
+      // El tipo sale del ADJUNTO cuando lo hay. Antes estaba fijo en "text": si el
+      // dueño mandaba una FOTO a mano desde su celular, el echo se registraba como
+      // texto con `text: null` y la Bandeja mostraba una BURBUJA VACÍA (ni la
+      // imagen ni un aviso). Medido en el tenant 27: 39 mensajes así, todos
+      // `origin=manual`, invisibles para quien los leyera.
+      type: input.attachment?.type ?? "text",
       text: input.text,
       status: "sent",
       origin: "manual",
@@ -751,11 +781,45 @@ async function ingestManualEcho(input: {
   const message = inserted[0];
   if (!message) return; // duplicado
 
+  // El adjunto del echo se persiste y se LIGA al mensaje. Sin esto la fila nace
+  // con type="image" pero sin media_asset_id: la Bandeja muestra el clip genérico
+  // en vez de la foto (mismo síntoma que antes, un paso más adelante).
+  if (input.attachment?.media) {
+    await attachMediaAsset(
+      input.organizationId,
+      message.id,
+      input.attachment.media
+    );
+  }
+
   // Solo lastMessageAt: un mensaje del negocio NUNCA abre la ventana de 24 h.
   await db
     .update(schema.conversation)
     .set({ lastMessageAt: waTimestamp, updatedAt: new Date() })
     .where(eq(schema.conversation.id, conversation.id));
+
+  // MENSAJE AUTOMÁTICO de WhatsApp Business (bienvenida/ausencia/catálogo): se
+  // registra en el hilo (el cliente SÍ lo vio), pero NO pausa la IA. El dueño no
+  // escribió nada; pausar por esto dejaba al agente mudo en cuanto el cliente
+  // decía "Hola" — el negocio contestaba su plantilla y el bot nunca más atendía.
+  if (esMensajeAutomatico(input.text)) {
+    console.log(
+      `[evolution-webhook] mensaje automático de WhatsApp Business en ${conversation.id} ` +
+        `— registrado SIN pausar la IA`
+    );
+    publish(input.organizationId, {
+      type: "message.new",
+      data: {
+        conversationId: conversation.id,
+        message: serializeMessage(message, null),
+      },
+    });
+    publish(input.organizationId, {
+      type: "conversation.updated",
+      data: { conversation: { id: conversation.id } },
+    });
+    return;
+  }
 
   // Pausa automática de la IA, idempotente y atómica (solo si no hay handoff).
   const paused = await db
@@ -819,32 +883,11 @@ async function delegateToNea(input: {
   const env = getEnv();
   const baseUrl = env.NEA_AGENT_URL;
   const apiKey = env.BOT_API_KEY;
-  if (!baseUrl || !apiKey) {
-    console.warn("[evolution-webhook] nea-agent sin NEA_AGENT_URL/BOT_API_KEY — mensaje a bandeja");
-    await ingestInboundMessage({
-      organizationId: input.organizationId,
-      identity: input.identity,
-      waMessageId: input.waMessageId,
-      type: "text",
-      text: input.text,
-      timestamp: input.timestamp,
-      skipAgent: true,
-    });
-    return;
-  }
-  // Ingestar a la bandeja (para que el mensaje quede en el hilo) sin reenviar
-  // al agente interno (nea-agent lo procesa).
-  await ingestInboundMessage({
-    organizationId: input.organizationId,
-    identity: input.identity,
-    waMessageId: input.waMessageId,
-    type: "text",
-    text: input.text,
-    timestamp: input.timestamp,
-    skipAgent: true,
-  });
+
   // La imagen puede venir como base64 (data:...) o como URL http de Evolution.
   // Si es URL, descargarla con el header apikey y convertirla a base64.
+  // Se normaliza ANTES de persistir el adjunto: si llega como URL, el binario
+  // no está disponible hasta aquí.
   let imageBase64 = input.imageBase64 ?? "";
   if (imageBase64 && !imageBase64.startsWith("data:") && !/^[A-Za-z0-9+/=]+$/.test(imageBase64.slice(0, 100))) {
     try {
@@ -896,6 +939,35 @@ async function delegateToNea(input: {
     } catch (err) {
       console.warn(`[evolution-webhook] error descargando audio: ${err}`);
     }
+  }
+  // Persistir el adjunto y ingestarlo a la Bandeja ANTES de llamar a nea-agent.
+  // La Bandeja previsualiza desde `/api/media/{assetId}` y la ingesta solo crea
+  // el `media_asset` si recibe `media`. Antes esta rama ingestaba SIEMPRE
+  // `type:"text"` sin media, así que las imágenes/audios de TODOS los tenants de
+  // Evolution GO no se veían en la Bandeja aunque el agente sí las procesara.
+  // El binario llega ya decodificado por Evolution (campo raíz `base64`) o se
+  // descargó arriba: no se toca Graph/Meta.
+  const attachment = await persistInboundAttachment({
+    organizationId: input.organizationId,
+    waMessageId: input.waMessageId,
+    imageBase64,
+    imageMime: input.imageMime,
+    audioBase64,
+    audioMime: input.audioMime,
+  });
+  await ingestInboundMessage({
+    organizationId: input.organizationId,
+    identity: input.identity,
+    waMessageId: input.waMessageId,
+    type: attachment?.type ?? "text",
+    text: input.text,
+    timestamp: input.timestamp,
+    media: attachment?.media ?? null,
+    skipAgent: true,
+  });
+  if (!baseUrl || !apiKey) {
+    console.warn("[evolution-webhook] nea-agent sin NEA_AGENT_URL/BOT_API_KEY — mensaje a bandeja");
+    return;
   }
   // Llamar a nea-agent /chat con la imagen base64 (modo producción: send=true,
   // nea-agent resuelve la conversación por identidad y envía la respuesta vía
@@ -953,6 +1025,92 @@ async function getInstanceToken(organizationId: string): Promise<string | null> 
     const creds = await getEvolutionCredentialsByOrg(organizationId);
     return creds?.instanceToken ?? null;
   } catch {
+    return null;
+  }
+}
+
+/**
+ * Persiste el adjunto entrante en el volumen y devuelve el `media` que la
+ * ingesta necesita para crear el `media_asset`.
+ *
+ * Por qué existe: la rama de farmacia (Evolution GO) delegaba a nea-agent
+ * ingestando SIEMPRE `type:"text"` y sin `media`, así que la Bandeja mostraba
+ * el mensaje como texto vacío y el adjunto no existía en `media_asset` — la UI
+ * solo previsualiza desde `/api/media/{assetId}` (message-thread.tsx). El
+ * binario YA viene decodificado por Evolution (campo raíz `base64`), por lo que
+ * no se toca Graph/Meta: se escribe directo con `saveMediaFile`.
+ *
+ * Devuelve null cuando no hay adjunto (texto puro) — la ingesta sigue igual.
+ */
+async function persistInboundAttachment(input: {
+  organizationId: string;
+  waMessageId: string;
+  imageBase64?: string;
+  imageMime?: string;
+  audioBase64?: string;
+  audioMime?: string;
+}): Promise<{ type: string; media: MediaInput } | null> {
+  const imageB64 = (input.imageBase64 ?? "").trim();
+  const audioB64 = (input.audioBase64 ?? "").trim();
+  if (!imageB64 && !audioB64) return null;
+
+  const isImage = Boolean(imageB64);
+  const raw = isImage ? imageB64 : audioB64;
+  // Acepta data:URI o base64 puro; una URL http NO es base64 (se descarta:
+  // el binario real ya viene en el campo raíz `base64` de Evolution).
+  const b64 = raw.startsWith("data:")
+    ? raw.slice(raw.indexOf(",") + 1)
+    : raw;
+  if (!/^[A-Za-z0-9+/=\s]+$/.test(b64.slice(0, 200))) {
+    console.warn("[evolution-webhook] adjunto no es base64 — no se persiste en la Bandeja");
+    return null;
+  }
+
+  let data: Buffer;
+  try {
+    data = Buffer.from(b64, "base64");
+  } catch {
+    return null;
+  }
+  if (!data.length) return null;
+
+  const kind = isImage ? "image" : "audio";
+  const mime = isImage
+    ? (input.imageMime || "image/jpeg")
+    : (input.audioMime || "audio/ogg");
+
+  try {
+    const { newId } = await import("@/lib/db/ids");
+    const assetId = newId("mediaAsset");
+    const { saveMediaFile } = await import("@/server/whatsapp/media");
+    // El archivo se guarda con el MISMO id que la fila de media_asset: la ruta
+    // /api/media/{assetId} hace readMediaFile(org, assetId) y busca exactamente
+    // ese segmento en el volumen. Guardarlo con otro id deja la fila apuntando a
+    // un archivo inexistente (410 al previsualizar).
+    await saveMediaFile(input.organizationId, assetId, data);
+    console.log(
+      `[evolution-webhook] adjunto persistido en la Bandeja: ${kind} ${data.length} bytes asset=${assetId}`
+    );
+    return {
+      type: kind,
+      // fetchStatus "available" + storagePath ya escrito: la ruta
+      // /api/media/{assetId} sirve el archivo del volumen sin tocar Graph;
+      // ensureAssetAvailable sale temprano porque el status es available.
+      media: {
+        kind,
+        waMediaId: input.waMessageId,
+        mimeType: mime,
+        fileName: null,
+        caption: null,
+        payload: null,
+        fetchStatus: "available",
+        storagePath: `${input.organizationId}/${assetId}`,
+        assetId,
+        fileSize: data.length,
+      },
+    };
+  } catch (err) {
+    console.warn(`[evolution-webhook] no se pudo persistir el adjunto: ${err}`);
     return null;
   }
 }

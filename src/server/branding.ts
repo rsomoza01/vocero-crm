@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
+import { getEnv } from "@/lib/env";
 import {
   DEFAULT_BRANDING,
   normalizeBranding,
@@ -37,10 +38,16 @@ export async function getBrandingContext(
         .from(schema.organization)
         .where(eq(schema.organization.id, organizationId))
         .limit(1)
-    : // Sin sesión (login, layout raíz): la única organización de la instancia.
+    : // Sin sesión (login, layout raíz): marca de la instancia. Se ordena por id
+      // para que sea DETERMINISTA — un LIMIT 1 sin ORDER BY devolvía una fila
+      // arbitraria según el plan del planner, así que la marca que se veía en el
+      // login cambiaba entre consultas y, al guardar sin sesión, se escribía en
+      // una organización cualquiera (origen del "Gentefarma" replicado en varios
+      // tenants, que no es el nombre de ninguno).
       await db
         .select({ id: schema.organization.id, metadata: schema.organization.metadata })
         .from(schema.organization)
+        .orderBy(schema.organization.id)
         .limit(1);
   if (!rows[0]) return { organizationId: null, branding: DEFAULT_BRANDING };
   const meta = parseMetadata(rows[0].metadata);
@@ -55,7 +62,31 @@ export async function getBrandingContext(
 export async function getBranding(
   organizationId?: string | null
 ): Promise<Branding> {
+  // Sin organización (login, layout raíz antes de autenticar) NO se cae al
+  // `LIMIT 1` de una org arbitraria: se devuelve la marca NEUTRA de la
+  // instancia. Así el login muestra el nombre del servicio y no el de una
+  // farmacia concreta (que además cambiaba entre consultas por el orden del
+  // planner al no llevar ORDER BY).
+  if (!organizationId) return brandingDeInstancia();
   return (await getBrandingContext(organizationId)).branding;
+}
+
+/**
+ * Marca NEUTRA de la instancia, para pantallas sin sesión (login).
+ *
+ * Toma el nombre de `INSTANCE_BRAND_NAME` (env) y el acento del branding de la
+ * primera organización —el aspecto visual del producto— pero SIN el nombre de
+ * ningún tenant. El favicon neutro se genera con la inicial del nombre.
+ */
+export function brandingDeInstancia(): Branding {
+  let nombre = DEFAULT_BRANDING.name;
+  try {
+    const env = getEnv();
+    if (env.INSTANCE_BRAND_NAME?.trim()) nombre = env.INSTANCE_BRAND_NAME.trim();
+  } catch {
+    // En build no hay entorno: se queda el default.
+  }
+  return { ...DEFAULT_BRANDING, name: nombre.slice(0, 30) };
 }
 
 export async function saveBranding(

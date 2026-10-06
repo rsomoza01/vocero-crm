@@ -23,8 +23,33 @@ export async function listConversations(
   since?: Date
 ): Promise<ConversationDto[]> {
   const db = getDb();
+  // Preview legible. Antes era `coalesce(m.text, m.type)`: cuando el mensaje no
+  // tenía texto (una FOTO sin leyenda, o un eco de imagen previo al fix) la lista
+  // mostraba la palabra literal "text" — el usuario veía "text" donde debía haber
+  // "📷 Foto". Ahora se nombra el TIPO con una etiqueta humana.
   const previewSql = sql<string | null>`(
-    select coalesce(m.text, m.type)
+    select coalesce(
+      nullif(m.text, ''),
+      case
+        when m.media_asset_id is not null then
+          case (select a.kind from media_asset a where a.id = m.media_asset_id)
+            when 'image' then '📷 Foto'
+            when 'audio' then '🎤 Audio'
+            when 'video' then '🎥 Vídeo'
+            when 'document' then '📄 Documento'
+            when 'sticker' then 'Sticker'
+            when 'location' then '📍 Ubicación'
+            when 'contacts' then '👤 Contacto'
+            else m.type
+          end
+        when m.type = 'image' then '📷 Foto'
+        when m.type = 'audio' then '🎤 Audio'
+        when m.type = 'video' then '🎥 Vídeo'
+        when m.type = 'document' then '📄 Documento'
+        when m.type = 'text' then '(mensaje sin texto)'
+        else m.type
+      end
+    )
     from message m
     where m.conversation_id = ${schema.conversation.id}
     order by m.created_at desc
