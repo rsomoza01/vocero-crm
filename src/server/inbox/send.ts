@@ -126,7 +126,7 @@ async function persistOutbound(input: {
   waMessageId: string | null;
   type: string;
   text: string | null;
-  status: "pending" | "failed";
+  status: "pending" | "sent" | "failed";
   error?: string | null;
   aiGenerated?: boolean;
   origin: "ai" | "operator";
@@ -255,7 +255,7 @@ export async function sendText(input: {
       waMessageId,
       type: "text",
       text: input.text,
-      status: "pending",
+      status: "sent",
       aiGenerated: input.aiGenerated,
       origin: input.aiGenerated ? "ai" : "operator",
     });
@@ -281,7 +281,7 @@ export async function sendText(input: {
     waMessageId,
     type: "text",
     text: input.text,
-    status: "pending",
+    status: "sent",
     aiGenerated: input.aiGenerated,
     origin: input.aiGenerated ? "ai" : "operator",
   });
@@ -390,7 +390,7 @@ export async function sendMediaMessage(input: {
         waMessageId,
         type: kind,
         text: null,
-        status: "pending",
+        status: "sent",
         origin: "operator",
         mediaAssetId: assetId,
         media: asset,
@@ -485,7 +485,7 @@ export async function sendMediaMessage(input: {
       waMessageId,
       type: kind,
       text: null,
-      status: "pending",
+      status: "sent",
       origin: "operator",
       mediaAssetId: assetId,
       media: asset,
@@ -646,7 +646,7 @@ export async function sendStructured(
       waMessageId,
       type: input.kind,
       text: null,
-      status: "pending",
+      status: "sent",
       origin: "operator",
       mediaAssetId: asset.id,
       media: asset,
@@ -696,7 +696,7 @@ export async function sendStructured(
     waMessageId,
     type: input.kind,
     text: null,
-    status: "pending",
+    status: "sent",
     origin: "operator",
     mediaAssetId: asset.id,
     media: asset,

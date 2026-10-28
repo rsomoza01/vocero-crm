@@ -7,18 +7,37 @@ import { getEnv } from "@/lib/env";
 
 export const dynamic = "force-dynamic";
 
-/** Origen permitido para CORS (el SAAS). Configurable por env. */
-const ALLOWED_ORIGIN = process.env.SSO_ALLOWED_ORIGIN || "https://app.gentefarma.com";
+/** Orígenes permitidos para CORS (el SAAS). Admite varios por coma. */
+function allowedOrigins(): string[] {
+  const raw = process.env.SSO_ALLOWED_ORIGIN || "https://app.gentefarma.com";
+  return raw.split(",").map((s) => s.trim()).filter(Boolean);
+}
 
-function withCors(res: Response): Response {
-  res.headers.set("Access-Control-Allow-Origin", ALLOWED_ORIGIN);
+/**
+ * CORS con el origen de la petición REFLEJADO.
+ *
+ * `Access-Control-Allow-Origin` solo admite UN origen. Con la lista entera
+ * (`"https://app.gentefarma.com,https://genteapp-cupones.web.app"`) el header es
+ * inválido y el navegador bloquea la respuesta — el SAAS ve
+ * `ClientException: Failed to fetch` aunque el backend responda 200. Mismo patrón
+ * que `/api/auth/sso`.
+ */
+function withCors(res: Response, req?: Request): Response {
+  const origins = allowedOrigins();
+  const origin = req?.headers.get("origin");
+  const allow =
+    origin && origins.includes(origin)
+      ? origin
+      : origins[0] ?? "https://app.gentefarma.com";
+  res.headers.set("Access-Control-Allow-Origin", allow);
   res.headers.set("Access-Control-Allow-Methods", "POST, OPTIONS");
   res.headers.set("Access-Control-Allow-Headers", "Content-Type, X-SSO-Signature, Authorization");
+  res.headers.set("Vary", "Origin");
   return res;
 }
 
-export async function OPTIONS() {
-  return withCors(new Response(null, { status: 204 }));
+export async function OPTIONS(req: Request) {
+  return withCors(new Response(null, { status: 204 }), req);
 }
 
 /** Comparación en tiempo constante para firmas hex. */
@@ -70,7 +89,7 @@ function randomPassword(): string {
 export async function POST(req: Request) {
   const env = getEnv();
   if (!env.SSO_SHARED_SECRET) {
-    return withCors(Response.json({ error: "disabled" }, { status: 404 }));
+    return withCors(Response.json({ error: "disabled" }, { status: 404 }), req);
   }
 
   const raw = await req.text();
@@ -78,16 +97,16 @@ export async function POST(req: Request) {
   try {
     body = JSON.parse(raw);
   } catch {
-    return withCors(Response.json({ error: "invalid_body" }, { status: 400 }));
+    return withCors(Response.json({ error: "invalid_body" }, { status: 400 }), req);
   }
 
   const email = (body.email ?? "").toString().trim().toLowerCase();
   const ownerName = (body.name ?? email.split("@")[0] ?? "").toString().trim();
   if (!email) {
-    return withCors(Response.json({ error: "email_required" }, { status: 400 }));
+    return withCors(Response.json({ error: "email_required" }, { status: 400 }), req);
   }
   if (!ownerName) {
-    return withCors(Response.json({ error: "name_required" }, { status: 400 }));
+    return withCors(Response.json({ error: "name_required" }, { status: 400 }), req);
   }
   const providerId = (body.providerId ?? "").toString().trim() || null;
   const slug = (body.slug ?? "").toString().trim() || null;
@@ -96,7 +115,7 @@ export async function POST(req: Request) {
   const sig = req.headers.get("x-sso-signature") ?? "";
   const expected = createHmac("sha256", env.SSO_SHARED_SECRET).update(raw).digest("hex");
   if (!timingSafeEqualHex(sig, expected)) {
-    return withCors(Response.json({ error: "bad_signature" }, { status: 401 }));
+    return withCors(Response.json({ error: "bad_signature" }, { status: 401 }), req);
   }
 
   const db = getDb();
@@ -136,13 +155,15 @@ export async function POST(req: Request) {
           .limit(1);
         if (!re[0]) {
           return withCors(
-            Response.json({ error: "signup_failed", detail: err.message }, { status: 409 })
+            Response.json({ error: "signup_failed", detail: err.message }, { status: 409 }),
+            req
           );
         }
         userId = re[0].id;
       } else {
         return withCors(
-          Response.json({ error: "signup_failed", detail: err instanceof Error ? err.message : "?" }, { status: 409 })
+          Response.json({ error: "signup_failed", detail: err instanceof Error ? err.message : "?" }, { status: 409 }),
+          req
         );
       }
     }
@@ -259,6 +280,7 @@ export async function POST(req: Request) {
 
   const url = `${env.APP_BASE_URL}/api/auth/sso/verify?token=${encodeURIComponent(token)}`;
   return withCors(
-    Response.json({ url, organizationId, existing: !created }, { status: created ? 201 : 200 })
+    Response.json({ url, organizationId, existing: !created }, { status: created ? 201 : 200 }),
+    req
   );
 }

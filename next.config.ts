@@ -21,6 +21,34 @@ const nextConfig: NextConfig = {
     NEXT_PUBLIC_APP_VERSION: version,
     NEXT_PUBLIC_BUILD_COMMIT: process.env.SOURCE_COMMIT ?? "",
   },
+  /**
+   * Cabeceras de seguridad.
+   *
+   * `Strict-Transport-Security` (HSTS) es la que faltaba: sin ella el navegador
+   * NO recuerda que este host debe ir SIEMPRE por HTTPS, así que si el usuario
+   * entra por `http://` (un enlace viejo, el autocompletado que elige http, un
+   * marcador antiguo) la primera petición viaja en claro. Con HSTS el navegador
+   * reescribe `http://` a `https://` ANTES de salir a la red. Los navegadores
+   * IGNORAN esta cabecera cuando llega por http (por especificación), así que
+   * declararla siempre es seguro: en desarrollo local por http no tiene efecto.
+   *
+   * `includeSubDomains` se omite a propósito: el dominio raíz aloja otros
+   * servicios (el SAAS) y un HSTS con subdominios obligaría a TODOS ellos a
+   * tener un certificado válido para siempre — si uno fallara, quedaría
+   * inaccesible. El host del CRM se protege igual sin ese flag.
+   */
+  async headers() {
+    const seguridad = [
+      {
+        key: "Strict-Transport-Security",
+        value: "max-age=31536000",
+      },
+      { key: "X-Content-Type-Options", value: "nosniff" },
+      { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+      { key: "X-Frame-Options", value: "SAMEORIGIN" },
+    ];
+    return [{ source: "/:path*", headers: seguridad }];
+  },
 };
 
 export default nextConfig;

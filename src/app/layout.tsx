@@ -35,7 +35,13 @@ export async function generateMetadata(): Promise<Metadata> {
 export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
-  const branding = await getBranding().catch(() => DEFAULT_BRANDING);
+  // MULTITENANT: el acento (color) es por organización, así que hay que
+  // resolverlo por la SESIÓN, no con un `getBranding()` sin org — ese cae al
+  // fallback `LIMIT 1` y pintaba a TODOS los tenants con el color de una org
+  // arbitraria (la misma raíz del bug del nombre "Gentefarma" repetido). Sin
+  // sesión (login) va el acento neutro de la instancia.
+  const org = (await getSessionOrNull())?.organizationId ?? null;
+  const branding = await getBranding(org).catch(() => DEFAULT_BRANDING);
   const theme = normalizeThemePreference(
     (await cookies()).get(THEME_COOKIE)?.value
   );
