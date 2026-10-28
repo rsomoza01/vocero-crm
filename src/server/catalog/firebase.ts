@@ -266,6 +266,91 @@ function mapProduct(id: string, d: Record<string, unknown>): ProductDoc {
   };
 }
 
+/** Tope de documentos al recorrer el catálogo completo como respaldo. */
+const CATALOG_MAX_DOCS = Number(process.env.CATALOG_MAX_DOCS ?? 20000);
+/** Cuántos documentos se aceptan del índice por tokens. */
+const CATALOG_INDEX_LIMIT = 2000;
+
+/**
+ * Documentos candidatos del provider para una consulta.
+ *
+ * POR QUÉ EXISTE: la lectura era `.where("ProviderId","==",id).limit(5000)`, y el provider
+ * 32 tiene 9.991 productos — la mitad del catálogo era INVISIBLE. Caso real (2026-10-28):
+ * `METRONIDAZOL 500MG X 10OVU ALESS` existía en Firestore y el agente respondía que no
+ * había óvulos (solo se veían 3 metronidazoles de los 4+). Qué mitad se perdía dependía del
+ * orden de los ids de documento (el SKU), así que el síntoma parecía aleatorio.
+ *
+ * 1. ÍNDICE `productTitleArray` (array-contains-any): decenas de documentos por término sin
+ *    importar el tamaño del catálogo. El provider se filtra EN MEMORIA, así que no hace
+ *    falta índice compuesto y también funciona cuando `ProviderId` está guardado como número.
+ * 2. RESPALDO paginado a catálogo completo: solo si el índice no aporta nada del provider
+ *    (typos como 'omeprasol' → 'omeprazol', o catálogos importados sin el array de tokens).
+ */
+async function candidatosDelProvider(
+  store: Firestore,
+  providerId: string,
+  term: string
+) {
+  const col = store.collection(getEnv().FIREBASE_COLLECTION_PRODUCTS);
+  const provider = String(providerId).trim();
+
+  const tokens = [
+    ...new Set(
+      term
+        .split(/\s+/)
+        .filter((x) => x.length >= 3 && /[a-z]/.test(x))
+    ),
+  ].slice(0, 10);
+  if (tokens.length) {
+    try {
+      const snapIdx = await col
+        .where("productTitleArray", "array-contains-any", tokens)
+        .limit(CATALOG_INDEX_LIMIT)
+        .get();
+      const propios = snapIdx.docs.filter(
+        (d) => String((d.data() as Record<string, unknown>).ProviderId ?? "").trim() === provider
+      );
+      if (propios.length) {
+        console.info(
+          `[catalog] provider ${provider}: ${propios.length} candidato(s) por índice para "${term}"`
+        );
+        return propios;
+      }
+    } catch (exc) {
+      console.warn(
+        `[catalog] índice productTitleArray no disponible (${String(exc).slice(0, 160)}): ` +
+          "se recorre el catálogo completo"
+      );
+    }
+  }
+
+  // RESPALDO: catálogo completo del provider, paginado. Aquí sí se mantiene el reintento
+  // con el ProviderId numérico (algunos tenants lo guardan así).
+  const docs: Awaited<ReturnType<typeof col.get>>["docs"] = [];
+  for (const clave of [provider, Number(provider)] as const) {
+    if (typeof clave === "number" && !/^\d+$/.test(provider)) continue;
+    let ultimo: unknown = null;
+    while (docs.length < CATALOG_MAX_DOCS) {
+      let q = col.where("ProviderId", "==", clave);
+      if (ultimo) q = q.startAfter(ultimo);
+      const snap = await q.limit(1000).get();
+      if (snap.empty) break;
+      for (const d of snap.docs) docs.push(d as (typeof docs)[number]);
+      ultimo = snap.docs[snap.docs.length - 1];
+      if (snap.size < 1000) break;
+    }
+    if (docs.length) break;
+  }
+  if (docs.length >= CATALOG_MAX_DOCS) {
+    console.error(
+      `[catalog] provider ${provider}: tope de ${CATALOG_MAX_DOCS} documentos alcanzado ` +
+        "— sube CATALOG_MAX_DOCS o revisa el índice productTitleArray"
+    );
+  }
+  console.info(`[catalog] provider ${provider}: ${docs.length} documentos recorridos para "${term}"`);
+  return docs;
+}
+
 /**
  * Busca productos del provider. Devuelve la lista canónica (precio ascendente)
  * con precio Bs calculado. Fase 1 exacta; si no hay resultados, fase 2 difusa
@@ -280,32 +365,9 @@ export async function searchProducts(
   if (!store) return [];
   const term = normalize(q);
   const tasa = await tasaBcv();
-  // El campo `ProviderId` NO está tipado igual en todos los tenants: la mayoría
-  // lo guarda como STRING ('05'), pero algunos lo tienen como NÚMERO (11). Una
-  // query con `==` exige el MISMO tipo, así que al provider 11 su catálogo
-  // (600 productos reales en Firestore) le devolvía 0 resultados y el agente
-  // respondía "no disponible" para todo. Solo si la consulta de texto vuelve
-  // vacía se reintenta con el tipo numérico (evita duplicar queries en el caso
-  // normal, que es el 99% del tráfico).
-  let snap = await store
-    .collection(getEnv().FIREBASE_COLLECTION_PRODUCTS)
-    .where("ProviderId", "==", providerId)
-    .limit(5000)
-    .get();
-  if (snap.empty && /^\d+$/.test(providerId)) {
-    const snapNum = await store
-      .collection(getEnv().FIREBASE_COLLECTION_PRODUCTS)
-      .where("ProviderId", "==", Number(providerId))
-      .limit(5000)
-      .get();
-    if (!snapNum.empty) {
-      console.warn(
-        `[catalog] ProviderId "${providerId}" guardado como NÚMERO en Firestore ` +
-          `(${snapNum.size} productos). Revisar el import de ese tenant.`
-      );
-      snap = snapNum;
-    }
-  }
+  // Los candidatos se traen por el ÍNDICE de tokens del título, no leyendo el catálogo
+  // entero: ver `candidatosDelProvider` (el limit(5000) dejaba media farmacia invisible).
+  const docs = await candidatosDelProvider(store, providerId, term);
 
   const exact: ProductDoc[] = [];
   const fuzzyAll: { p: ProductDoc; score: number }[] = [];
@@ -460,7 +522,7 @@ export async function searchProducts(
   const cumpleFiltros = (nombre: string): boolean =>
     tienePresentacion(nombre) && tieneDosis(nombre);
 
-  for (const doc of snap.docs) {
+  for (const doc of docs) {
     const p = mapProduct(doc.id, doc.data() as Record<string, unknown>);
     const hay = normalize(p.nombre);
     if (!hay) continue;
