@@ -400,7 +400,9 @@ export async function searchProducts(
   // no solo dígitos puros — "40mg" por Levenshtein matchea "10mg"/"50mg"/"400mg"
   // y desbordaba la respuesta con 20 irrelevantes (pandoprazol 40mg → AMLODIPINA).
   const esNumero = (t: string) => /\d/.test(t);
-  const distintivos = termTokens.filter((t) => !NO_DISTINTIVO.has(t) && !esNumero(t));
+  const distintivos = termTokens.filter(
+    (t) => !NO_DISTINTIVO.has(t) && !esNumero(t) && !SINONIMOS_PRESENTACION[t]
+  );
   const noDistintivos = termTokens.filter((t) => NO_DISTINTIVO.has(t) && !esNumero(t));
   // Tokens de ACCESORIO (jeringa, aguja, hisopo, agua...). En la fase difusa
   // NO califican un producto si la consulta trae además un token de FÁRMACO:
@@ -531,7 +533,13 @@ export async function searchProducts(
   // Tokens de letras que el producto DEBE contener (todos) para clasificar
   // como coincidencia fuerte. Excluye marcas/sal (NO_DISTINTIVO) que solo
   // puntúan, y las presentaciones genéricas ya filtradas.
-  const requeridos = letrasTokens.filter((t) => !NO_DISTINTIVO.has(t));
+  // La PRESENTACIÓN no es un token obligatorio: el catálogo escribe "X 10OVU" y el cliente
+  // dice "óvulos", así que exigir "ovulos" como substring tira el producto aunque el filtro
+  // de presentación (`tienePresentacion`) sí lo acepte. Caso real (provider 32,
+  // 2026-10-28): "metronidazol ovulos" devolvía solo el título que dice OVULOS.
+  const requeridos = letrasTokens.filter(
+    (t) => !NO_DISTINTIVO.has(t) && !presentacionTokensQuery.has(t)
+  );
 
   const cumpleFiltros = (nombre: string): boolean =>
     tienePresentacion(nombre) && tieneDosis(nombre);
