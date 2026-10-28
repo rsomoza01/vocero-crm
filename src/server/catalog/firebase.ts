@@ -145,6 +145,9 @@ const SINONIMOS_PRESENTACION: Record<string, string> = {
   comprimido: "tableta", comprimidos: "tableta",
   ampolla: "ampolla", ampollas: "ampolla", amp: "ampolla",
   vial: "vial", viales: "vial",
+  // ÓVULOS. Faltaba por completo, así que pedir "metronidazol óvulos" no activaba el filtro
+  // de presentación y el ranking se quedaba con el único título que decía "OVULOS".
+  ovulo: "ovulo", ovulos: "ovulo", óvulo: "ovulo", óvulos: "ovulo",
 };
 
 /**
@@ -171,6 +174,9 @@ const MARCADOR_PRESENTACION: Record<string, string[]> = {
   crema: ["crema", "cremas", "unguento", "pomada", "gel", "locion", "loción"],
   inyectable: ["amp", "ampolla", "ampollas", "vial", "viales", "inyect",
                "inyectable"],
+  // ÓVULOS con sus abreviaturas de catálogo: OVU (OVUMET 500MG X 10OVU) y VU
+  // (METRONIDAZOL 500MG X 10VU COLMED). Antes solo existía la palabra completa.
+  ovulo: ["ovu", "ovul", "ovus", "ovulo", "ovulos", "vu", "vvu"],
 };
 
 /**
@@ -204,6 +210,14 @@ function tokensPresentacion(nombre: string): string[] {
       continue;
     }
     out.push(t);
+    // El catálogo pega la presentación al número de envase: "10OVU", "1AMP", "1SOB",
+    // "X20TAB". Además del token completo se emite la parte alfabética, para que los
+    // marcadores ("ovu", "amp", "sob", "tab") encuentren la forma.
+    // También con la "x" del envase delante: "x1amp" → "amp", "x20tab" → "tab".
+    const soloLetras = t.replace(/^x?\d+/, "");
+    if (soloLetras && soloLetras !== t && soloLetras.length >= 2) {
+      out.push(soloLetras);
+    }
   }
   return out;
 }
