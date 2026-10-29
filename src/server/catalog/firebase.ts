@@ -593,11 +593,17 @@ export async function searchProducts(
     let score = 0;
     let matchedDistintivo = false;
     for (const qt of calificadores) {
-      // maxD=1: distancia de 1 letra (typo). maxD=2 para tokens largos
-      // producía falsos positivos ("moderan"≈"madera", "bumetin"≈"brucetin").
-      const maxD = 1;
+      // maxD=1 para tokens cortos: con maxD=2 en palabras de 7-8 letras aparecían
+      // falsos positivos ("moderan"≈"madera", "bumetin"≈"brucetin").
+      //
+      // PERO los nombres de fármacos LARGOS se escriben mal con más de una letra:
+      // "epirinolactona" → ESPIRONOLACTONA son 3 ediciones y el cliente recibía
+      // "⚠️ No disponibles: EPIRINOLACTONA" teniendo el producto en catálogo
+      // (provider 32, 2026-10-28). Cuando AMBOS tokens tienen 10+ letras se permite
+      // maxD=3: a esa longitud, dos palabras distintas no quedan a 3 ediciones.
       for (const ht of hayTokens) {
         if (ht.length < 3) continue;
+        const maxD = qt.length >= 10 && ht.length >= 10 ? 3 : 1;
         if (levenshtein(qt, ht, maxD) <= maxD) {
           score += 1;
           matchedDistintivo = true;
