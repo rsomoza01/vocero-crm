@@ -29,6 +29,7 @@ import {
   type MediaInput,
 } from "@/server/inbox/ingest";
 import { esMensajeAutomatico } from "@/server/inbox/automaticos";
+import { liberarHandoffManualExpirado } from "@/server/inbox/handoff";
 import {
   getOrCreateContactByIdentity,
   type ResolvedIdentity,
@@ -613,8 +614,10 @@ export async function POST(req: Request) {
         );
         const farmConv = await db
           .select({
+            id: schema.conversation.id,
             aiEnabled: schema.conversation.aiEnabled,
             handoffAt: schema.conversation.handoffAt,
+            handoffReason: schema.conversation.handoffReason,
           })
           .from(schema.conversation)
           .where(
@@ -624,6 +627,18 @@ export async function POST(req: Request) {
             )
           )
           .limit(1);
+        // HANDOFF POR RESPUESTA MANUAL: pasado el TTL se libera solo, aquí y no
+        // más abajo, porque esta es la puerta que decide si el mensaje llega al
+        // agente o se queda en la bandeja para un humano.
+        if (farmConv[0]) {
+          const liberada = await liberarHandoffManualExpirado(farmConv[0]);
+          if (liberada) {
+            farmConv[0].aiEnabled = true;
+            farmConv[0].handoffAt = null;
+            farmConv[0].handoffReason = null;
+          }
+        }
+
         const convAiOff =
           farmConv[0] && (farmConv[0].aiEnabled === false || farmConv[0].handoffAt !== null);
         if (esFarmacia && !botPaused && !convAiOff) {

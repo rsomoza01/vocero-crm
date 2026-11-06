@@ -1,5 +1,6 @@
 import { asc, desc, eq } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
+import { liberarHandoffManualExpirado } from "@/server/inbox/handoff";
 import { newId } from "@/lib/db/ids";
 import { scoped } from "@/lib/db/tenant";
 import { moveLeadToStage as moveLeadThroughHistory } from "@/server/leads/stage-history";
@@ -96,6 +97,22 @@ export async function runAgentTurn(conversationId: string): Promise<void> {
   const conversation = convRows[0];
   if (!conversation) return;
   const organizationId = conversation.organizationId;
+
+  // HANDOFF POR RESPUESTA MANUAL: se libera solo pasado el TTL. Si no, la
+  // conversación queda muda para siempre aunque el cliente vuelva a escribir
+  // (ver src/server/inbox/handoff.ts).
+  if (
+    await liberarHandoffManualExpirado({
+      id: conversation.id,
+      aiEnabled: conversation.aiEnabled,
+      handoffAt: conversation.handoffAt,
+      handoffReason: conversation.handoffReason,
+    })
+  ) {
+    conversation.aiEnabled = true;
+    conversation.handoffAt = null;
+    conversation.handoffReason = null;
+  }
 
   // Condiciones de silencio: handoff activo o IA apagada en la conversación.
   if (conversation.handoffAt || !conversation.aiEnabled) return;
