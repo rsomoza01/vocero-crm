@@ -92,6 +92,12 @@ export async function POST(req: Request) {
     if (!creds?.instanceToken || !base) {
       return apiError(409, "no_connection", "WhatsApp no está conectado");
     }
+    // Instancia marcada como «reconectar»: no se llama a Evolution. Sin esto
+    // cada turno dejaba un 401 «not authorized» en el log (el indicador de
+    // «escribiendo…» no puede funcionar con un token inválido).
+    if (creds.status === "reconnect_required") {
+      return Response.json({ ok: false, reason: "reconnect_required" });
+    }
     try {
       // Este fork de Evolution (evolution-foundation/evolution-go) expone la
       // presencia en POST /message/presence con {number, state, delay} — NO en
