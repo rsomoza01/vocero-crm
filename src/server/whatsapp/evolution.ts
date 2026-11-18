@@ -84,14 +84,33 @@ export async function sendEvolutionText(
       "No hay token de instancia de Evolution conectado",
     );
   }
-  const { status, json } = await evolutionFetch("/send/text", {
-    body: {
-      number: evolutionRecipient(input.to),
-      text: input.text,
-      formatJid: true,
-    },
-    instanceToken: token,
-  });
+  let status: number;
+  let json: EvolutionPayload;
+  try {
+    ({ status, json } = await evolutionFetch("/send/text", {
+      body: {
+        number: evolutionRecipient(input.to),
+        text: input.text,
+        formatJid: true,
+      },
+      instanceToken: token,
+    }));
+  } catch (err) {
+    // Timeout / error de red: puede ser Evolution lento —o una instancia con la
+    // sesión caída, que no contesta nunca—. Se pregunta a /instance/status antes
+    // de clasificarlo como transitorio: si la sesión está caída, esto no se
+    // arregla reintentando y hay que marcar la credencial.
+    if (err instanceof SendChannelError && err.code === "channel_unavailable") {
+      if (!(await isEvolutionInstanceLoggedIn(token))) {
+        void markEvolutionReconnectRequired(input.organizationId).catch(() => {});
+        throw new SendChannelError(
+          "reconnect_required",
+          "La sesión de WhatsApp de esta farmacia está caída: reconecta el número",
+        );
+      }
+    }
+    throw err;
+  }
   if (status !== 200) {
     throw mapEvolutionError(status, json, input.organizationId);
   }
@@ -152,6 +171,31 @@ export async function sendEvolutionMedia(
     );
   }
   return { waMessageId: String(id) };
+}
+
+/**
+ * ¿La instancia está realmente logueada?
+ *
+ * `/instance/status` distingue «conectada» de «logueada». Medido en producción
+ * (2026-11-18): una instancia con sesión caída responde `{Connected:true,
+ * LoggedIn:false}` y los envíos NO contestan (timeout de 15 s), así que el CRM
+ * los clasificaba como `channel_unavailable` → 502 → el agente reintentaba y
+ * encolaba durante 24 h. Con esta sonda el caso se reconoce y se marca la
+ * credencial para que el panel pida reconectar.
+ */
+export async function isEvolutionInstanceLoggedIn(
+  instanceToken: string,
+): Promise<boolean> {
+  try {
+    const { status, json } = await evolutionFetch("/instance/status", {
+      method: "GET",
+      instanceToken,
+    });
+    if (status !== 200) return false;
+    return Boolean(getPath(json, "data", "LoggedIn"));
+  } catch {
+    return false;
+  }
 }
 
 /** Traduce un error HTTP de Evolution a SendChannelError tipado. */
