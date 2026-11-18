@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizarTelefonoVE } from "@/app/api/bot/notify/route";
+import { normalizarTelefonoVE } from "@/lib/telefono-ve";
 
 describe("normalizarTelefonoVE", () => {
   it("convierte el 0 local a 58", () => {

@@ -33,6 +33,7 @@ import { requireBotKey } from "@/server/bot/auth";
 import { getOrCreateContactByIdentity } from "@/server/inbox/identity";
 import { getOrCreateConversation } from "@/server/inbox/ingest";
 import { SendError, sendText } from "@/server/inbox/send";
+import { normalizarTelefonoVE } from "@/lib/telefono-ve";
 import { z } from "zod";
 
 export const dynamic = "force-dynamic";
@@ -43,27 +44,6 @@ const bodySchema = z.object({
   text: z.string().min(1).max(4000),
   name: z.string().max(120).optional(),
 });
-
-/**
- * Venezuela: el número tal como lo escribe una persona no sirve para WhatsApp.
- *   04249172943   → 584249172943   (0 local → 58)
- *   0424 9578845  → 584249578845   (con espacios)
- *   4249172943    → 584249172943   (sin 0 ni 58)
- *   584249172943  → se deja igual
- */
-export function normalizarTelefonoVE(crudo: string): string | null {
-  let d = String(crudo || "").replace(/\D/g, "");
-  if (!d) return null;
-  if (d.startsWith("58")) {
-    // ya viene con país
-  } else if (d.startsWith("0") && d.length >= 11) {
-    d = `58${d.slice(1)}`;
-  } else if (d.length === 10) {
-    d = `58${d}`;
-  }
-  if (d.length < 12 || d.length > 13) return null;
-  return d;
-}
 
 export async function POST(req: Request) {
   const denied = requireBotKey(req);
