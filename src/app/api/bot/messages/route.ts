@@ -76,6 +76,14 @@ export async function POST(req: Request) {
       if (err.code === "sandbox_violation") {
         return apiError(409, "sandbox_violation", err.message);
       }
+      // Fallos PERMANENTES: la instancia de la farmacia no está conectada o su
+      // token ya no vale. Se devuelven como 409 (conflicto, no se arregla
+      // reintentando) para que el agente NO reintente 4 veces ni encole en
+      // pending_send: antes llegaban como 502, el agente los trataba como
+      // transitorios, reintentaba y encolaba mensajes que nunca podían salir.
+      if (err.code === "reconnect_required" || err.code === "not_connected") {
+        return apiError(409, err.code, err.message);
+      }
       return apiError(502, err.code, err.message);
     }
     throw err;

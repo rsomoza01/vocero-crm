@@ -16,6 +16,7 @@ import {
   type SendMediaInput,
   type SendTextInput,
 } from "./channel";
+import { markEvolutionReconnectRequired } from "./evolution-credentials";
 
 const EVOLUTION_TIMEOUT_MS = 15000;
 
@@ -157,11 +158,17 @@ export async function sendEvolutionMedia(
 export function mapEvolutionError(
   status: number,
   json: Record<string, unknown> | null,
-  _organizationId: string,
+  organizationId: string,
 ): SendChannelError {
   const rawMsg = getPath(json, "error") ?? getPath(json, "message");
   const msg = typeof rawMsg === "string" ? rawMsg : `Evolution GO respondió ${status}`;
   if (status === 401 || status === 403) {
+    // El token de la instancia ya no vale (instancia recreada o pareo nuevo).
+    // Se MARCA la credencial: el panel muestra «reconectar» y los envíos
+    // siguientes fallan rápido en vez de repetir el 401 en cada turno. Antes el
+    // organizationId llegaba aquí y se descartaba, así que la credencial seguía
+    // como «connected» y el error se reintentaba indefinidamente.
+    void markEvolutionReconnectRequired(organizationId).catch(() => {});
     return new SendChannelError(
       "reconnect_required",
       "El token de instancia de Evolution no es válido: reconecta la instancia",
