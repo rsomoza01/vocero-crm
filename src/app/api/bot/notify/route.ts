@@ -26,7 +26,7 @@
  *   → 409 not_connected | reconnect_required | sandbox_violation | window_closed
  *   → 502 (resto de fallos del canal)
  */
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { getDb, schema } from "@/lib/db";
 import { apiError, parseBody } from "@/lib/api";
 import { requireBotKey } from "@/server/bot/auth";
